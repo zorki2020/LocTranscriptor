@@ -227,7 +227,8 @@ def test_sampler_sees_process_tree_memory(tmp_path: Path, monkeypatch: pytest.Mo
     """The child starts a ~200 MB grandchild: the tree RSS peak sees it."""
     from transcribator import bench  # noqa: PLC0415
 
-    grandchild = "b = bytearray(200 * 1024 * 1024); import time; time.sleep(2)"
+    # Written pages, not a zero bytearray: macOS does not count untouched zero pages in RSS.
+    grandchild = "b = b'x' * (200 * 1024 * 1024); import time; time.sleep(2)"
     script = tmp_path / "parent.py"
     script.write_text(
         "import json, subprocess, sys\n"
