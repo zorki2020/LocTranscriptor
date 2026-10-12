@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ t("title_upload") }}{% endblock %}
+{% block content %}
+<h1 class="page-title">{{ t("add_recording") }}</h1>
+{# app.js takes its messages from the data-msg-* attributes: CSP allows no inline scripts. #}
+<section id="drop" class="drop" aria-label="{{ t("drop_label") }}" aria-describedby="drop-note"
+  data-msg-too-large="{{ t("js_too_large") }}"
+  data-msg-queued="{{ t("js_queued") }}"
+  data-msg-untitled="{{ t("untitled") }}"
+  data-msg-failed="{{ t("js_failed") }}"
+  data-msg-aborted="{{ t("js_aborted") }}"
+  data-msg-uploading="{{ t("uploading") }}"
+  data-msg-uploading-n="{{ t("uploading_n") }}">
+  <p class="drop-lead">
+    <span class="drop-idle">{{ t("drop_idle") }}</span>
+    <button type="button" class="btn btn-primary" hx-post="/pick" hx-include="#language" hx-target="#drop-status" hx-indicator="#drop" hx-disabled-elt="this">{{ t("choose_file") }}</button>
+  </p>
+  <p class="drop-over" aria-hidden="true">{{ t("drop_release") }}</p>
+  <p class="drop-caption">mp3, mp4, m4a, wav</p>
+  <p class="drop-lang">
+    <label for="language">{{ t("recording_language") }}</label>
+    <select id="language" class="select" name="language">
+      {% for code in recording_langs %}
+      <option value="{{ code }}"{% if code == default_lang %} selected{% endif %}>{{ language_name(code) }}</option>
+      {% endfor %}
+    </select>
+  </p>
+  <p class="drop-picking">{{ t("drop_picking") }}</p>
+  <div class="drop-progress" id="upload-box" hidden>
+    <span class="drop-progress-label" id="upload-label">{{ t("uploading") }}</span>
+    <progress id="upload-progress" max="100" value="0" aria-labelledby="upload-label"></progress>
+    <span class="num" id="upload-pct">0%</span>
+  </div>
+  <div id="drop-status" class="drop-status" aria-live="polite"></div>
+</section>
+<p class="note" id="drop-note">{{ t("drop_note") }}</p>
+
+<section class="section" aria-labelledby="queue-title">
+  <h2 class="section-title" id="queue-title">{{ t("queue") }}</h2>
+  {% include "_queue.html" %}
+</section>
+{% endblock %}

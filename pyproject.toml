@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "transcribator"
+version = "0.0.0"
+description = "Private local meeting transcriber with speaker diarization (Russian), runs on Apple Silicon"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.143.0",
+    "jinja2>=3.1.6",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+transcribator = "transcribator.cli:main"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy",
+    "pytest",
+    "ruff",
+]
+# The chosen stack has no heavy Python dependencies: FluidAudio is an external program
+# built from source (see scripts/install_fluidaudio.sh).
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/transcribator"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# All ffmpeg calls live in one module; arguments are passed as a list, no shell.
+"src/transcribator/pipeline/audio.py" = ["S603", "S607"]
+# fluidaudiocli by absolute path, arguments as a list, no shell, output discarded.
+"src/transcribator/backends/fluidaudio.py" = ["S603"]
+# The benchmark runs macOS system tools (caffeinate, time, vm_stat, lsof) without a shell.
+"src/transcribator/bench.py" = ["S603", "S607"]
+# Processing runs under system wrappers (absolute paths), arguments as a list, no shell.
+"src/transcribator/pipeline/isolated.py" = ["S603"]
+# Autostart calls /bin/launchctl with arguments as a list, no shell.
+"src/transcribator/autostart.py" = ["S603"]
+"tests/**" = ["S101", "S603", "S607"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"

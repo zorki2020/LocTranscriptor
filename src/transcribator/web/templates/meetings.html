@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ t("title_archive") }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title">{{ t("title_archive") }}</h1>
+  {% if items %}<p class="page-count num">{{ plural("meetings", items|length) }}</p>{% endif %}
+</div>
+{% if items or q %}
+{# Search goes through htmx without changing the URL: the query stays out of browser history. #}
+<form id="search" class="search" action="/meetings" method="get" role="search">
+  <label class="visually-hidden" for="q">{{ t("search_label") }}</label>
+  <input id="q" class="search-input" type="search" name="q" value="{{ q }}" maxlength="200" placeholder="{{ t("search_label") }}" autocomplete="off" spellcheck="false" aria-keyshortcuts="/" hx-get="/meetings" hx-trigger="input changed delay:250ms, search" hx-sync="this:replace" hx-target="#results" hx-select="#results" hx-swap="outerHTML">
+  <kbd class="search-kbd" aria-hidden="true">/</kbd>
+</form>
+{% endif %}
+<div id="results" class="results">
+{% if q %}
+  {% if groups %}
+  <p class="results-meta" role="status">{{ t("search_summary", hits=plural("hits", hit_count), meetings=plural("in_meetings", groups|length)) }}{% if hit_count >= hit_limit %}{{ t("search_limited", limit=hit_limit) }}{% endif %}</p>
+  <ol class="hit-groups" role="list">
+    {% for g in groups %}
+    <li class="hit-group">
+      <div class="row-head">
+        <a class="row-title" href="/meetings/{{ g.hit.meeting_id }}">{{ g.hit.title }}</a>
+        <span class="row-date num" title="{{ g.hit.recorded_at|human_date }}">{{ g.hit.recorded_at|short_date }}</span>
+      </div>
+      <ul class="hits" role="list">
+        {% for row in g.rows %}
+        <li><a class="hit" href="/meetings/{{ row.hit.meeting_id }}#seg-{{ row.hit.idx }}"><span class="ts num">{{ row.hit.start_s|clock }}</span><span class="hit-text"><span class="spk {{ row.spk }}">{{ row.speaker }}</span> {{ row.text }}</span></a></li>
+        {% endfor %}
+      </ul>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <div class="empty-state" role="status">
+    <p class="empty-title">{{ t("search_nothing", q=q) }}</p>
+    <p class="empty-text">{{ t("search_nothing_hint") }}</p>
+  </div>
+  {% endif %}
+{% elif items %}
+  <ul class="rows archive" role="list">
+    {% for m in items %}
+    <li class="row a-row">
+      <div class="row-head">
+        <a class="row-title" href="/meetings/{{ m.id }}">{{ m.title }}</a>
+        {% if m.status != "done" %}<span class="chip chip-{{ m.status }}">{{ status_label(m.status, m.job_stage) }}</span>{% endif %}
+        <span class="row-date num" title="{{ m.recorded_at|human_date }}">{{ m.recorded_at|short_date }}</span>
+      </div>
+      {% set dur = m.duration_s|human_duration %}
+      {% if dur or m.speakers %}
+      <p class="row-meta num">{% if dur %}<span>{{ dur }}</span>{% endif %}{% if m.speakers %}<span>{{ plural("speakers", m.speakers) }}</span>{% endif %}</p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <div class="empty-state">
+    <p class="empty-title">{{ t("archive_empty") }}</p>
+    <p class="empty-text">{{ t("archive_empty_hint") }}</p>
+    <a class="btn btn-primary" href="/">{{ t("add_recording") }}</a>
+  </div>
+{% endif %}
+</div>
+{% endblock %}

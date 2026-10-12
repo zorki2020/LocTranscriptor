@@ -1,0 +1,29 @@
+{# The block is replaced whole: polling is on only while there are active jobs. #}
+<div id="queue" class="queue" data-poll hx-get="/queue" hx-swap="outerHTML" hx-trigger="{% if active %}every 3s, {% endif %}queue-changed from:body">
+{% if items %}
+  <ul class="rows" role="list">
+  {% for m in items %}
+    {% set lang = languages.get(m.id) %}
+    <li class="row q-row" data-id="{{ m.id }}">
+      <span class="q-title">{% if m.status == "done" %}<a href="/meetings/{{ m.id }}">{{ m.title }}</a>{% else %}{{ m.title }}{% endif %}</span>
+      {% set dur = m.duration_s|human_duration %}
+      <span class="q-dur num">{{ dur }}{% if lang %}{% if dur %} · {% endif %}<abbr class="lang-code" title="{{ t("recording_language") }}: {{ language_name(lang) }}">{{ lang|upper }}</abbr>{% endif %}</span>
+      <span class="q-status"><span class="chip chip-{{ m.status }}">{{ status_label(m.status, m.job_stage) }}</span></span>
+      <span class="q-time num">{% if m.status == "processing" %}{% if started.get(m.id) %}{{ t("running_for", time=started.get(m.id)|elapsed) }}{% endif %}{% else %}{{ m.added_at|when }}{% endif %}</span>
+      <span class="q-action">
+        {% if m.status == "error" %}
+        <button type="button" class="btn btn-sm" id="retry-{{ m.id }}" hx-post="/meetings/{{ m.id }}/retry" hx-swap="none" hx-disabled-elt="this">{{ t("retry") }}</button>
+        {% elif m.status == "done" %}
+        <a class="link-quiet" id="open-{{ m.id }}" href="/meetings/{{ m.id }}" tabindex="-1">{{ t("open") }}</a>
+        {% endif %}
+      </span>
+      {% if m.status == "error" %}
+      <p class="q-detail">{{ error_text(m.error_code) }} <span class="code">{{ t("error_code", code=m.error_code or "unknown") }}</span></p>
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">{{ t("queue_empty") }}</p>
+{% endif %}
+</div>

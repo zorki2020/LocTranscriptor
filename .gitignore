@@ -1,0 +1,56 @@
+# Secrets and environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+id_rsa*
+id_ed25519*
+
+# Real data: recordings, transcripts, databases
+data/
+*.mp3
+*.mp4
+*.m4a
+*.wav
+*.ogg
+*.flac
+*.opus
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+
+# Transcripts and raw results (contain meeting text)
+*.raw.json
+*.raw.md
+*.fake.md
+*.fluidaudio.md
+
+# Models
+models/
+*.gguf
+*.safetensors
+*.onnx
+*.pt
+*.bin
+*.ckpt
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+
+# macOS and editors
+.DS_Store
+.idea/
+.vscode/

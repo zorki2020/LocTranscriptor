@@ -1,0 +1,36 @@
+# Install: brew install pre-commit gitleaks && pre-commit install
+# Update versions: pre-commit autoupdate
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      # Vendored third-party files stay byte for byte (SHA-256 in THIRD_PARTY_NOTICES.md).
+      - id: end-of-file-fixer
+        exclude: ^src/transcribator/web/static/htmx\.min\.js$
+      - id: trailing-whitespace
+        exclude: ^src/transcribator/web/static/htmx\.min\.js$
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: forbid-audio-models-data
+        name: forbid audio, models and databases in commits
+        language: fail
+        entry: "Audio, models, databases and keys must not be committed"
+        files: '\.(mp3|mp4|m4a|wav|ogg|flac|opus|gguf|safetensors|onnx|pt|ckpt|sqlite|sqlite3|db|pem|key|p12)$'

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ t("title_meeting") }}{% endblock %}
+{% block content %}
+<article class="meeting">
+<header class="meeting-head">
+  <form class="meta" hx-post="/meetings/{{ meeting.id }}/meta" hx-target="#meta-msg">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h1 class="meeting-title"><textarea class="inline inline-title" name="title" rows="1" maxlength="300" required autocomplete="off" spellcheck="false" aria-label="{{ t("meeting_title") }}">{{ meeting.title }}</textarea></h1>
+    <div class="meeting-meta num">
+      {% set dur = meeting.duration_s|human_duration %}
+      {% if dur %}<span>{{ dur }}</span>{% endif %}
+      {% if speakers %}<span>{{ plural("speakers", speakers|length) }}</span>{% endif %}
+      {% if language %}<span title="{{ t("recording_language") }}">{{ language_name(language) }}</span>{% endif %}
+      <input class="inline inline-date{% if not meeting.recorded_at %} is-empty{% endif %}" type="datetime-local" name="recorded_at" value="{{ meeting.recorded_at|local_input }}" aria-label="{{ t("recorded_at") }}">
+    </div>
+    <p class="meta-hint" aria-hidden="true">{{ t("edit_hint") }}</p>
+    <div id="meta-msg" class="meta-msg" aria-live="polite"></div>
+  </form>
+  <div class="meeting-actions">
+    {% if meeting.status == "done" %}<a class="btn" href="/meetings/{{ meeting.id }}.md" download>{{ t("export_md") }}</a>{% endif %}
+    {% if meeting.status != "processing" %}<button type="button" class="btn-text btn-text-danger" data-dialog="delete-dialog">{{ t("delete_meeting") }}</button>{% endif %}
+  </div>
+</header>
+
+{% if meeting.status != "done" %}
+{% include "_status.html" %}
+{% endif %}
+
+{% if speakers %}
+<section class="speakers" aria-labelledby="speakers-title">
+  <h2 class="section-title" id="speakers-title">{{ t("speakers") }} <span class="section-aside">{{ t("speakers_hint") }}</span></h2>
+  <ul class="speaker-list" role="list">
+    {% for s in speakers %}
+    <li class="speaker {{ s.spk }}">
+      <button type="button" class="speaker-chip" aria-expanded="false" aria-controls="spk-form-{{ s.index }}"><span class="dot" aria-hidden="true"></span>{{ s.shown }}</button>
+      <form class="speaker-form" id="spk-form-{{ s.index }}" hidden hx-post="/meetings/{{ meeting.id }}/speakers" hx-target="find .form-msg">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="label" value="{{ s.label }}">
+        <span class="dot" aria-hidden="true"></span>
+        <input class="inline inline-speaker" type="text" name="name" value="{{ s.name }}" maxlength="100" placeholder="{{ t("speaker_n", n=s.index) }}" autocomplete="off" spellcheck="false" aria-label="{{ t("speaker_name_for", name=s.shown) }}">
+        <span class="form-msg" aria-live="polite"></span>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if meeting.status == "done" %}
+<section class="transcript" aria-labelledby="transcript-title">
+  <h2 class="section-title" id="transcript-title">{{ t("transcript") }}</h2>
+  {% for chunk in segments|batch(40) %}
+  <div class="chunk">
+    {% for row in chunk %}
+    <p class="seg{% if row.turn %} turn{% endif %}" id="seg-{{ row.idx }}"><a class="ts num" href="#seg-{{ row.idx }}">{{ row.segment.start|clock(long) }}</a><span class="seg-text"><span class="spk {{ row.spk }}">{{ row.speaker }}<span class="visually-hidden">:</span></span> {{ row.segment.text }}</span></p>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+</article>
+
+{% if meeting.status != "processing" %}
+<dialog id="delete-dialog" class="dialog" aria-labelledby="delete-title" aria-describedby="delete-text">
+  <h2 class="dialog-title" id="delete-title">{{ t("delete_question") }}</h2>
+  <p class="dialog-text" id="delete-text">{{ t("delete_text") }}</p>
+  <div id="delete-msg" aria-live="polite"></div>
+  <div class="dialog-actions">
+    <button type="button" class="btn" data-close autofocus>{{ t("cancel") }}</button>
+    <button type="button" class="btn btn-danger" hx-post="/meetings/{{ meeting.id }}/delete" hx-target="#delete-msg" hx-disabled-elt="this">{{ t("delete") }}</button>
+  </div>
+</dialog>
+{% endif %}
+{% endblock %}
