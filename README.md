@@ -17,7 +17,7 @@ Add a meeting recording and get a word-for-word transcript split by speaker. Sea
 
 ## Download for Mac
 
-**[Download LocTranscriptor.dmg](https://github.com/zorki2020/transcribator/releases/latest/download/LocTranscriptor.dmg)**
+**[Download LocTranscriptor.dmg](https://github.com/zorki2020/transcribator/releases/latest/download/LocTranscriptor.dmg)** · [all releases](https://github.com/zorki2020/transcribator/releases)
 
 It is a regular Mac app, no Terminal needed. Русская инструкция [ниже](#установка-на-mac-по-русски).
 
@@ -46,7 +46,7 @@ On first launch the app shows a few tips. **Help → Show Tips** brings them bac
 
 ### Установка на Mac (по-русски)
 
-**[Скачать LocTranscriptor.dmg](https://github.com/zorki2020/transcribator/releases/latest/download/LocTranscriptor.dmg)**
+**[Скачать LocTranscriptor.dmg](https://github.com/zorki2020/transcribator/releases/latest/download/LocTranscriptor.dmg)** · [все версии](https://github.com/zorki2020/transcribator/releases)
 
 Это обычное приложение для Mac, Терминал не нужен.
 
