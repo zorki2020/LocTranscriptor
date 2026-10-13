@@ -5,7 +5,8 @@
 - `transcribator.sqlite3`: the database (600);
 - `uploads/`: temporary copies of recordings dropped into the browser, kept until
   processing finishes;
-- `work/`: temporary job files with the recognition result.
+- `work/`: temporary job files with the recognition result;
+- in the app also `models/` (speech models) and `settings.json` (languages).
 """
 
 from __future__ import annotations
@@ -26,6 +27,9 @@ _OWN_ENTRIES = frozenset(
         "work",
         "worker.lock",
         "serve.lock",
+        # The app: downloaded models and the settings file.
+        "models",
+        "settings.json",
     }
 )
 

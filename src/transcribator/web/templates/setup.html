@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% block title %}{{ t("title_setup") }}{% endblock %}
+{% block width %}narrow{% endblock %}
+{% block content %}
+{% set total = setup.total_bytes or total_bytes %}
+<section class="setup" aria-labelledby="setup-title">
+  <span class="setup-icon" aria-hidden="true"><span class="i i-wave"></span></span>
+  <h1 class="page-title" id="setup-title">{{ t("setup_title") }}</h1>
+  <p class="setup-lead">{{ t("setup_lead") }}</p>
+  <ul class="setup-points" role="list">
+    <li><span class="i i-check" aria-hidden="true"></span>{{ t("privacy_local") }}</li>
+    <li><span class="i i-check" aria-hidden="true"></span>{{ t("setup_point_network") }}</li>
+    <li><span class="i i-check" aria-hidden="true"></span>{{ t("setup_point_checked") }}</li>
+  </ul>
+  <p class="setup-space num">{{ t("setup_space", size=m.size(total), free=m.size(free_bytes)) }}</p>
+  {% include "_setup_status.html" %}
+  <p class="note">{{ t("setup_background") }}</p>
+</section>
+{% endblock %}

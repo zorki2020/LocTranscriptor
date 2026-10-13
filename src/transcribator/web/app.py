@@ -10,6 +10,12 @@ and would be rejected by the Origin check.
 
 All visible text comes from `strings.py` in the interface language
 (`TRANSCRIBATOR_UI_LANG`). File names, titles, paths and search queries are not logged.
+
+App mode (`app_mode=True`, the Transcribator.app window): every request needs the access
+key cookie, files are added by path (`/enqueue`, from the native file dialog and Finder
+drops), the first run downloads the models (`/setup`), and languages are chosen in
+`/settings`, and the upload page shows the first-run tips once (`/tour/seen`). Without
+app mode the service behaves as the developer's browser version.
 """
 
 from __future__ import annotations
@@ -21,13 +27,14 @@ import secrets
 import shutil
 import sqlite3
 import stat
+import unicodedata
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -37,7 +44,15 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from transcribator.i18n import RECORDING_LANGS, UI_LANGS, default_recording_lang, ui_lang
+from transcribator import settings as app_settings
+from transcribator.i18n import (
+    RECORDING_LANGS,
+    UI_LANGS,
+    default_recording_lang,
+    set_preferences,
+    ui_lang,
+)
+from transcribator.modelstore import ModelStore
 from transcribator.paths import uploads_dir
 from transcribator.pipeline.audio import AudioError, probe_duration
 from transcribator.pipeline.format_md import render_markdown, speaker_labels
@@ -53,10 +68,28 @@ _WRITE_BATCH = 1024**2
 UPLOAD_REF = re.compile(r"[0-9a-f]{32}")
 _MAX_ID = 2**63 - 1
 SEARCH_LIMIT = 50
+# Where the app writes its log (AppPaths.logDirectory in the Swift app), for Settings.
+APP_LOG_DIR = "~/Library/Logs/LocTranscriptor"
 _NAME_LIMIT = 300
 _SPEAKER_NAME_LIMIT = 100
 _HERE = Path(__file__).parent
 _HTTP_STATUSES = frozenset({400, 403, 404, 405, 409, 413})
+
+
+def home_relative(path: Path) -> str:
+    """A path for display, with the home folder shortened to ~ as macOS shows it."""
+    home = Path.home()
+    try:
+        rel = path.relative_to(home)
+    except ValueError:
+        return str(path)
+    return "~" if rel == Path(".") else f"~/{rel}"
+
+
+# Paths in one /enqueue request (the form itself is capped at 64 KB and 50 fields).
+ENQUEUE_LIMIT = 40
+# Characters that can't be in a download file name on macOS or confuse other systems.
+_FILENAME_BAD = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
 _FINAL = frozenset({"done", "error"})
 
 
@@ -113,6 +146,18 @@ def _name_taken(meeting: repo.Meeting, label: str, name: str) -> bool:
     return False
 
 
+def download_name(title: str, meeting_id: int) -> str:
+    """File name for a Markdown export in the app: the meeting title, cleaned up."""
+    # Format characters (bidi overrides and the like) could disguise the name in Finder.
+    visible = "".join(ch for ch in title if unicodedata.category(ch) != "Cf")
+    name = " ".join(_FILENAME_BAD.sub(" ", visible).split()).strip(" .")[:120]
+    return f"{name or f'meeting-{meeting_id}'}.md"
+
+
+def _content_disposition(name: str, fallback: str) -> str:
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
 def _recording_lang(value: str | None) -> str | None:
     """Recording language from a request: the default when absent, None when unknown."""
     if value is None or not value.strip():
@@ -127,8 +172,16 @@ def create_app(
     data_root: Path,
     port: int,
     picker: Callable[[], Path | None] | None = None,
+    app_mode: bool = False,
+    access_key: str | None = None,
+    models: ModelStore | None = None,
 ) -> FastAPI:
     choose = picker or pick_file
+    if app_mode and (access_key is None or models is None):
+        raise ValueError("app mode needs an access key and a model store")
+    if app_mode:
+        chosen = app_settings.load(data_root)
+        set_preferences(ui_lang=chosen.ui_lang, recording_lang=chosen.recording_lang)
     csrf_token = secrets.token_urlsafe(32)
     env = Environment(
         loader=FileSystemLoader(_HERE / "templates"),
@@ -150,10 +203,11 @@ def create_app(
     env.globals["language_name"] = language_name
     env.globals["recording_langs"] = RECORDING_LANGS
     env.globals["csrf"] = csrf_token
+    env.globals["app_mode"] = app_mode
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.csrf_token = csrf_token
-    app.add_middleware(LocalOnlyMiddleware, port=port, csrf_token=csrf_token)
+    app.add_middleware(LocalOnlyMiddleware, port=port, csrf_token=csrf_token, access_key=access_key)
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
     @contextmanager
@@ -202,6 +256,25 @@ def create_app(
             raise StarletteHTTPException(400) from None
         return {key: values[0] for key, values in fields.items()}
 
+    async def read_form_lists(request: Request) -> dict[str, list[str]]:
+        content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+        if content_type != FORM_CONTENT_TYPE:
+            raise StarletteHTTPException(400)
+        body = bytearray()
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > FORM_LIMIT_BYTES:
+                raise StarletteHTTPException(413)
+        try:
+            return parse_qs(body.decode("utf-8"), keep_blank_values=True, max_num_fields=50)
+        except (UnicodeDecodeError, ValueError):
+            raise StarletteHTTPException(400) from None
+
+    def require_app_mode() -> ModelStore:
+        if not app_mode or models is None:
+            raise StarletteHTTPException(404)
+        return models
+
     # --- errors: generic text, no exception details ----------------------------------
 
     @app.exception_handler(StarletteHTTPException)
@@ -226,9 +299,18 @@ def create_app(
         return {"items": items, "started": started, "active": active, "languages": languages}
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> HTMLResponse:
+    def index() -> Response:
+        if models is not None and not models.ready():
+            return RedirectResponse("/setup", status_code=303)
+        # The tips start by themselves once per install, and only in the app: whoever
+        # runs the service from source already knows the page.
+        tour_auto = app_mode and not app_settings.load(data_root).tour_seen
         return page(
-            "index.html", nav="add", default_lang=default_recording_lang(), **queue_context()
+            "index.html",
+            nav="add",
+            default_lang=default_recording_lang(),
+            tour_auto=tour_auto,
+            **queue_context(),
         )
 
     @app.get("/queue", response_class=HTMLResponse)
@@ -237,6 +319,8 @@ def create_app(
 
     @app.post("/pick", response_class=HTMLResponse)
     async def pick(request: Request) -> HTMLResponse:
+        if app_mode:
+            raise StarletteHTTPException(404)  # the app has its own file dialog
         # htmx sends the language select as a form; a bare POST gets the default.
         form = await read_form(request) if request.headers.get("content-type") else {}
         language = _recording_lang(form.get("language"))
@@ -244,10 +328,9 @@ def create_app(
             return page("_message.html", 400, text=t("bad_language"), error=True)
         return await run_in_threadpool(pick_and_enqueue, language)
 
-    def pick_and_enqueue(language: str) -> HTMLResponse:
-        path = choose()
-        if path is None:
-            return page("_message.html", text=t("no_file_chosen"), error=False)
+    def enqueue_path(path: Path, language: str) -> dict[str, Any]:
+        """Check a recording by its path and queue it (no copy is made). Returns
+        `{"ok": True, "id", "title"}` or `{"ok": False, "code", "error"}`."""
         try:
             if not path.is_absolute():
                 raise AudioError("bad_path")
@@ -255,14 +338,14 @@ def create_app(
             if not stat.S_ISREG(info.st_mode):
                 raise AudioError("not_a_file")
             probe_duration(path)
-        except OSError:
-            return page("_message.html", 400, text=t("file_unreadable"), error=True)
+        except (OSError, ValueError):  # ValueError: a NUL byte in the path
+            return {"ok": False, "code": "file_unreadable", "error": t("file_unreadable")}
         except AudioError as exc:
-            return page("_message.html", 400, text=display.file_error(exc.code), error=True)
+            return {"ok": False, "code": exc.code, "error": display.file_error(exc.code)}
         title = display.title_from_filename(path.name)
         recorded_at = datetime.fromtimestamp(info.st_mtime, UTC).isoformat(timespec="seconds")
         with open_db() as conn:
-            repo.enqueue(
+            meeting_id = repo.enqueue(
                 conn,
                 title=title,
                 recorded_at=recorded_at,
@@ -270,12 +353,107 @@ def create_app(
                 source_ref=str(path),
                 language=language,
             )
+        return {"ok": True, "id": meeting_id, "title": title}
+
+    def pick_and_enqueue(language: str) -> HTMLResponse:
+        path = choose()
+        if path is None:
+            return page("_message.html", text=t("no_file_chosen"), error=False)
+        result = enqueue_path(path, language)
+        if not result["ok"]:
+            return page("_message.html", 400, text=result["error"], error=True)
+        title = result["title"]
         return page(
             "_message.html",
             headers={"HX-Trigger": "queue-changed"},
             text=t("queued_title", title=title),
             error=False,
         )
+
+    @app.post("/enqueue")
+    async def enqueue(request: Request) -> JSONResponse:
+        """App mode: queue recordings by path (the native file dialog and Finder drops
+        give paths, so nothing is copied). Paths are checked like the picker's."""
+        require_app_mode()
+        form = await read_form_lists(request)
+        language = _recording_lang(next(iter(form.get("language", [])), None))
+        if language is None:
+            return JSONResponse({"error": t("bad_language"), "code": "bad_language"}, 400)
+        paths = [p for p in form.get("path", []) if p]
+        if not paths or len(paths) > ENQUEUE_LIMIT:
+            raise StarletteHTTPException(400)
+
+        def run() -> list[dict[str, Any]]:
+            return [enqueue_path(Path(p), language) for p in paths]
+
+        results = await run_in_threadpool(run)
+        headers = {"HX-Trigger": "queue-changed"} if any(r["ok"] for r in results) else None
+        return JSONResponse({"results": results}, headers=headers)
+
+    # --- first run: models -----------------------------------------------------------
+
+    def setup_context(store: ModelStore) -> dict[str, Any]:
+        state = store.state()
+        return {
+            "setup": state,
+            "total_bytes": state["total_bytes"],
+            "free_bytes": store.free_bytes(),
+        }
+
+    @app.get("/setup", response_class=HTMLResponse)
+    def setup_page() -> HTMLResponse:
+        store = require_app_mode()
+        return page("setup.html", nav="setup", **setup_context(store))
+
+    @app.get("/setup/status", response_class=HTMLResponse)
+    def setup_status() -> HTMLResponse:
+        store = require_app_mode()
+        ctx = setup_context(store)
+        headers = {"HX-Redirect": "/"} if ctx["setup"]["phase"] == "done" else None
+        return page("_setup_status.html", headers=headers, **ctx)
+
+    @app.post("/setup/start", response_class=HTMLResponse)
+    def setup_start() -> HTMLResponse:
+        store = require_app_mode()
+        if not store.ready():
+            store.start()
+        return page("_setup_status.html", **setup_context(store))
+
+    # --- settings --------------------------------------------------------------------
+
+    @app.get("/settings", response_class=HTMLResponse)
+    def settings_page() -> HTMLResponse:
+        require_app_mode()
+        return page(
+            "settings.html",
+            nav="settings",
+            recording_lang=default_recording_lang(),
+            ui_langs=UI_LANGS,
+            recording_langs=RECORDING_LANGS,
+            data_dir=home_relative(data_root),
+            log_dir=APP_LOG_DIR,
+        )
+
+    @app.post("/settings")
+    async def save_settings(request: Request) -> Response:
+        require_app_mode()
+        form = await read_form(request)
+        ui = form.get("ui_lang", "").strip().lower()
+        rec = form.get("recording_lang", "").strip().lower()
+        if ui not in UI_LANGS or rec not in RECORDING_LANGS:
+            return message(request, 400, t("bad_language"))
+
+        await run_in_threadpool(app_settings.update, data_root, ui_lang=ui, recording_lang=rec)
+        set_preferences(ui_lang=ui, recording_lang=rec)
+        return Response(status_code=200, headers={"HX-Refresh": "true"})
+
+    @app.post("/tour/seen")
+    def tour_seen() -> Response:
+        """The first-run tips were finished or skipped: they don't start by themselves
+        again. Help > Show Tips still replays them."""
+        require_app_mode()
+        app_settings.update(data_root, tour_seen=True)
+        return Response(status_code=204)
 
     @app.post("/upload")
     async def upload(request: Request) -> JSONResponse:
@@ -390,8 +568,10 @@ def create_app(
         """Number of meetings per status for the menu bar icon. Counters only: no
         titles, paths or content."""
         with open_db() as conn:
-            counts = queries.status_counts(conn)
-        return JSONResponse(counts, headers={"Cache-Control": "no-store"})
+            data: dict[str, Any] = dict(queries.status_counts(conn))
+        if models is not None:
+            data.update(models_ready=models.ready(), ui_lang=ui_lang())
+        return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
     @app.get("/meetings/{meeting_id:int}.md")
     def export_md(meeting_id: int) -> Response:
@@ -408,10 +588,18 @@ def create_app(
             names=meeting.names,
             lang=ui_lang(),
         )
+        fallback = f"meeting-{meeting_id}.md"
+        # In a browser the title would end up in the download history: id only. The app
+        # has no such history, so the file is named after the meeting.
+        disposition = (
+            _content_disposition(download_name(meeting.title, meeting_id), fallback)
+            if app_mode
+            else f'attachment; filename="{fallback}"'
+        )
         return Response(
             text,
             media_type="text/markdown; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="meeting-{meeting_id}.md"'},
+            headers={"Content-Disposition": disposition},
         )
 
     @app.get("/meetings/{meeting_id:int}/status", response_class=HTMLResponse)

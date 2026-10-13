@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ t("title_meeting") }}{% endblock %}
+{% block width %}reading{% endblock %}
 {% block content %}
 <article class="meeting">
 <header class="meeting-head">
@@ -8,20 +9,24 @@
     <h1 class="meeting-title"><textarea class="inline inline-title" name="title" rows="1" maxlength="300" required autocomplete="off" spellcheck="false" aria-label="{{ t("meeting_title") }}">{{ meeting.title }}</textarea></h1>
     <div class="meeting-meta num">
       {% set dur = meeting.duration_s|human_duration %}
+      {# The date reads as text in the interface language; the native field (its format
+         follows the system locale) shows only while the date is being changed. #}
+      <button type="button" class="date-text{% if not meeting.recorded_at %} is-empty{% endif %}" aria-expanded="false" aria-controls="recorded-at"><span class="visually-hidden">{{ t("recorded_at") }}: </span>{{ meeting.recorded_at|human_date }}</button>
+      <input class="inline inline-date" id="recorded-at" type="datetime-local" name="recorded_at" value="{{ meeting.recorded_at|local_input }}" aria-label="{{ t("recorded_at") }}" hidden>
       {% if dur %}<span>{{ dur }}</span>{% endif %}
       {% if speakers %}<span>{{ plural("speakers", speakers|length) }}</span>{% endif %}
       {% if language %}<span title="{{ t("recording_language") }}">{{ language_name(language) }}</span>{% endif %}
-      <input class="inline inline-date{% if not meeting.recorded_at %} is-empty{% endif %}" type="datetime-local" name="recorded_at" value="{{ meeting.recorded_at|local_input }}" aria-label="{{ t("recorded_at") }}">
     </div>
     <p class="meta-hint" aria-hidden="true">{{ t("edit_hint") }}</p>
     <div id="meta-msg" class="meta-msg" aria-live="polite"></div>
   </form>
   <div class="meeting-actions">
-    {% if meeting.status == "done" %}<a class="btn" href="/meetings/{{ meeting.id }}.md" download>{{ t("export_md") }}</a>{% endif %}
-    {% if meeting.status != "processing" %}<button type="button" class="btn-text btn-text-danger" data-dialog="delete-dialog">{{ t("delete_meeting") }}</button>{% endif %}
+    {% if meeting.status == "done" %}<a class="btn" href="/meetings/{{ meeting.id }}.md" download><span class="i i-download" aria-hidden="true"></span>{{ t("export_md") }}</a>{% endif %}
+    {% if meeting.status != "processing" %}<button type="button" class="btn btn-ghost btn-ghost-danger" data-dialog="delete-dialog"><span class="i i-trash" aria-hidden="true"></span>{{ t("delete_meeting") }}</button>{% endif %}
   </div>
 </header>
 
+<div class="meeting-body{% if speakers and meeting.status == "done" %} has-aside{% endif %}">
 {% if meeting.status != "done" %}
 {% include "_status.html" %}
 {% endif %}
@@ -58,10 +63,12 @@
   {% endfor %}
 </section>
 {% endif %}
+</div>
 </article>
 
 {% if meeting.status != "processing" %}
 <dialog id="delete-dialog" class="dialog" aria-labelledby="delete-title" aria-describedby="delete-text">
+  <div class="dialog-icon" aria-hidden="true"><span class="i i-trash"></span></div>
   <h2 class="dialog-title" id="delete-title">{{ t("delete_question") }}</h2>
   <p class="dialog-text" id="delete-text">{{ t("delete_text") }}</p>
   <div id="delete-msg" aria-live="polite"></div>

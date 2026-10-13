@@ -495,7 +495,8 @@ def test_pick_rejects_non_audio_and_missing(tmp_path: Path) -> None:
     env = Env(tmp_path / "data", picker=lambda: text)
     response = env.post("/pick")
     assert response.status_code == 400
-    assert "This file won&#39;t work." in response.text
+    assert "This isn&#39;t an audio or video file" in response.text
+    assert "Code: probe_failed" in response.text
     assert "Секретная" not in response.text
 
     for target in (tmp_path / "missing.mp3", tmp_path, Path("relative.mp3")):
@@ -752,7 +753,7 @@ def test_queue_statuses_and_retry(env: Env) -> None:
 def test_retry_from_meeting_page_redirects_back(env: Env) -> None:
     meeting_id = env.add_error("probe_failed")
     html = env.client.get(f"/meetings/{meeting_id}").text
-    assert "Code: probe_failed" in html and "Retry processing" in html
+    assert "Code: probe_failed" in html and "</span>Retry</button>" in html
     assert 'id="transcript-title"' not in html
     response = env.post(f"/meetings/{meeting_id}/retry?back=meeting")
     assert response.status_code == 303
@@ -822,7 +823,7 @@ def test_export_only_for_done_meetings(env: Env) -> None:
 def test_queue_polls_only_while_active(env: Env) -> None:
     html = env.client.get("/queue").text
     assert 'id="queue"' in html and 'hx-trigger="queue-changed from:body"' in html
-    assert "Recordings you add and their progress will show up here." in html
+    assert "Added recordings and their progress will appear here" in html
     env.add_done()
     assert 'hx-trigger="queue-changed from:body"' in env.client.get("/queue").text
     conn = env.conn()
@@ -901,9 +902,10 @@ def test_display_helpers() -> None:
     # There is no summary stage any more: an old stage code shows as generic processing.
     assert display.status_label("processing", "summarize") == "Processing"
     assert display.status_label("queued") == "Queued"
-    assert "Put the file back" in display.error_text("source_missing")
+    assert "Put it back" in display.error_text("source_missing")
     assert display.error_text("crash_X").startswith("Processing stopped")
-    assert display.file_error("probe_failed").endswith("Code: probe_failed.")
+    assert display.file_error("probe_failed").startswith("This isn't an audio or video file")
+    assert display.file_error("probe_failed").endswith(" Code: probe_failed")
     assert display.title_from_filename("dir/ \t") == "Untitled"
 
 
@@ -927,9 +929,10 @@ def test_display_helpers_in_russian(ru: None) -> None:
     assert display.short_date(None, now) == "без даты"
     assert display.status_label("processing", "transcribe") == "Распознавание речи"
     assert display.status_label("processing", None) == "Обработка"
-    assert "Верните файл" in display.error_text("source_missing")
+    assert "Верните его на место" in display.error_text("source_missing")
     assert display.error_text("crash_X").startswith("Обработка остановилась")
-    assert display.file_error("probe_failed").startswith("Файл не подходит.")
+    assert display.file_error("probe_failed").startswith("Это не аудио и не видео")
+    assert display.file_error("probe_failed").endswith(" Код: probe_failed")
     assert display.title_from_filename("dir/ \t") == "Без названия"
 
 
@@ -951,8 +954,8 @@ def _title(html: str) -> str:
 @pytest.mark.parametrize(
     ("lang", "titles"),
     [
-        ("en", ("Upload", "Archive", "Archive", "Meeting", "Error", "Transcribator")),
-        ("ru", ("Загрузка", "Архив", "Архив", "Встреча", "Ошибка", "Транскрибатор")),
+        ("en", ("Add recording", "Archive", "Archive", "Meeting", "Error", "LocTranscriptor")),
+        ("ru", ("Добавить запись", "Архив", "Архив", "Встреча", "Ошибка", "LocTranscriptor")),
     ],
 )
 def test_titles_and_history_hold_no_content(
@@ -967,7 +970,7 @@ def test_titles_and_history_hold_no_content(
         html = env.client.get(url).text
         assert _title(html) == f"{title} · {app_name}"
         assert private_title not in _title(html) and "Ёлку" not in _title(html)
-        assert f'<html lang="{lang}" translate="no">' in html
+        assert f'<html lang="{lang}" translate="no" class="dark-theme is-loading">' in html
         assert '<meta name="google" content="notranslate">' in html
         assert "hx-replace-url" not in html and "hx-push-url" not in html
     # Search works with a plain GET too; the URL doesn't change when searching via htmx.
@@ -1004,7 +1007,7 @@ def test_meeting_status_polls_until_final(env: Env) -> None:
     conn.close()
     fragment = env.client.get(status_url)
     assert "hx-refresh" not in fragment.headers
-    assert "Separating speakers" in fragment.text and "less than a minute so far" in fragment.text
+    assert "Finding speakers" in fragment.text and "less than a minute so far" in fragment.text
 
     conn = env.conn()
     repo.complete(conn, job, Transcript([Segment(0.0, 1.0, "S1", "Текст.")], 1.0))
@@ -1097,8 +1100,8 @@ def test_upload_page_in_russian(env: Env, ru: None, monkeypatch: pytest.MonkeyPa
     assert ">Английский</option>" in html and ">Русский</option>" in html
     assert _selected(html) == ["ru"]
     assert ">Выбрать файл</button>" in html
-    assert 'data-msg-uploading-n="Загрузка {i} из {n}"' in html
-    assert "Здесь появятся добавленные записи и ход их обработки." in html
+    assert 'data-msg-uploading-n="Загружается {i} из {n}"' in html
+    assert "Здесь появятся добавленные записи и ход их обработки" in html
 
 
 def test_app_js_strings_come_from_data_attributes(env: Env) -> None:
@@ -1218,3 +1221,29 @@ def test_every_string_has_same_placeholders_in_both_languages() -> None:
     for key, variants in STRINGS.items():
         assert set(variants) == {"en", "ru"}, key
         assert fields(variants["en"]) == fields(variants["ru"]), key
+
+
+def test_meeting_date_reads_as_text(env: Env) -> None:
+    meeting_id = env.add_done(recorded_at="2026-10-09T12:00:00+00:00")
+    html = env.client.get(f"/meetings/{meeting_id}").text
+    button = re.search(r'<button type="button" class="date-text"([^>]*)>(.*?)</button>', html)
+    assert button is not None
+    assert 'aria-controls="recorded-at"' in button.group(1)
+    assert 'aria-expanded="false"' in button.group(1)
+    text = re.sub(r"<[^>]+>", "", button.group(2))
+    assert re.fullmatch(r"Recording date: Oct 9, 2026, \d\d:\d\d", text)
+    # The native field keeps the value for saving and shows only while editing.
+    field = re.search(r'<input class="inline inline-date" id="recorded-at"[^>]*>', html)
+    assert field is not None and field.group(0).endswith(" hidden>")
+    assert re.search(r'name="recorded_at" value="2026-10-09T\d\d:00"', field.group(0))
+
+
+def test_meeting_date_in_russian_and_unset(env: Env, ru: None) -> None:
+    dated = env.add_done(recorded_at="2026-10-09T12:00:00+00:00")
+    html = env.client.get(f"/meetings/{dated}").text
+    assert re.search(r"Дата записи: </span>9 октября 2026, \d\d:\d\d</button>", html)
+    assert "10/09/2026" not in html
+    undated = env.add_done("Без даты", recorded_at=None)
+    html = env.client.get(f"/meetings/{undated}").text
+    assert re.search(r'class="date-text is-empty"[^>]*>.*?дата не указана</button>', html)
+    assert 'name="recorded_at" value=""' in html

@@ -20,6 +20,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
 from transcribator.offline import OFFLINE_ENV
+from transcribator.pipeline.audio import SANDBOXED_ENV
 from transcribator.pipeline.tempfiles import cleanup_stale
 
 CAFFEINATE = "/usr/bin/caffeinate"
@@ -42,6 +43,8 @@ def child_env(parent: Mapping[str, str] | None = None) -> dict[str, str]:
     """Clean child environment: basic variables, our own settings and the network ban."""
     source = os.environ if parent is None else parent
     env = {k: v for k, v in source.items() if k in _ENV_KEEP or k.startswith(_ENV_PREFIXES)}
+    # Only run_isolated may say "already sandboxed", and only when it really wraps the child.
+    env.pop(SANDBOXED_ENV, None)
     env.update(OFFLINE_ENV)
     return env
 
@@ -102,13 +105,18 @@ def run_isolated(
     on_start: Callable[[int], None] | None = None,
 ) -> ChildResult:
     """Run `cmd` under the wrappers and wait for it to finish, at most `timeout_s`."""
+    prefix = wrappers(low_priority=low_priority)
+    env = child_env()
+    if prefix:
+        # The child is already in the no-network sandbox: it must not try to nest one.
+        env[SANDBOXED_ENV] = "1"
     proc = subprocess.Popen(
-        [*wrappers(low_priority=low_priority), *cmd],
+        [*prefix, *cmd],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
-        env=child_env(),
+        env=env,
     )
     stderr = b""
     timed_out = False

@@ -7,6 +7,9 @@ Two separate settings:
   `TRANSCRIBATOR_LANGUAGE`, `en` by default. It can be changed per meeting on the upload
   page and is stored with the meeting.
 
+In the app both can also be chosen in its settings (`settings.py`): the service passes the
+choice here with `set_preferences`, and it wins over the environment.
+
 Strings live in small per-module tables `{key: {"en": ..., "ru": ...}}` and are looked up
 with `pick`. A missing translation falls back to English, a missing key is a bug.
 """
@@ -31,7 +34,20 @@ LANGUAGE_NAMES: Table = {
 }
 
 
+# Choices made in the app's settings; None means "use the environment".
+_preferences: dict[str, str | None] = {UI_LANG_ENV: None, RECORDING_LANG_ENV: None}
+
+
+def set_preferences(*, ui_lang: str | None, recording_lang: str | None) -> None:
+    """Languages chosen in the app's settings (None: fall back to the environment)."""
+    _preferences[UI_LANG_ENV] = ui_lang if ui_lang in UI_LANGS else None
+    _preferences[RECORDING_LANG_ENV] = recording_lang if recording_lang in RECORDING_LANGS else None
+
+
 def _setting(env: str, allowed: tuple[str, ...]) -> str:
+    chosen = _preferences.get(env)
+    if chosen in allowed:
+        return chosen
     value = os.environ.get(env, "").strip().lower()
     return value if value in allowed else FALLBACK
 

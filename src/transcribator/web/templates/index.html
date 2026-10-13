@@ -1,42 +1,95 @@
 {% extends "base.html" %}
 {% block title %}{{ t("title_upload") }}{% endblock %}
 {% block content %}
+<div class="upload">
+<div class="upload-main">
 <h1 class="page-title">{{ t("add_recording") }}</h1>
 {# app.js takes its messages from the data-msg-* attributes: CSP allows no inline scripts. #}
-<section id="drop" class="drop" aria-label="{{ t("drop_label") }}" aria-describedby="drop-note"
+<section id="drop" class="drop" data-tour="drop" aria-label="{{ t("drop_label") }}" aria-describedby="drop-note"
   data-msg-too-large="{{ t("js_too_large") }}"
   data-msg-queued="{{ t("js_queued") }}"
   data-msg-untitled="{{ t("untitled") }}"
   data-msg-failed="{{ t("js_failed") }}"
   data-msg-aborted="{{ t("js_aborted") }}"
   data-msg-uploading="{{ t("uploading") }}"
-  data-msg-uploading-n="{{ t("uploading_n") }}">
+  data-msg-uploading-n="{{ t("uploading_n") }}"{% if app_mode %} data-msg-add-failed="{{ t("js_add_failed") }}" data-msg-no-bridge="{{ t("js_no_bridge") }}"{% endif %}>
+  <div class="drop-icon" aria-hidden="true"><span class="i i-upload"></span></div>
   <p class="drop-lead">
     <span class="drop-idle">{{ t("drop_idle") }}</span>
+    {% if app_mode %}
+    {# App window: the native file dialog (app.js, bridge "pick"), the file is added by path. #}
+    <button type="button" class="btn btn-primary" data-native-pick>{{ t("choose_file") }}</button>
+    {% else %}
     <button type="button" class="btn btn-primary" hx-post="/pick" hx-include="#language" hx-target="#drop-status" hx-indicator="#drop" hx-disabled-elt="this">{{ t("choose_file") }}</button>
+    {% endif %}
   </p>
   <p class="drop-over" aria-hidden="true">{{ t("drop_release") }}</p>
-  <p class="drop-caption">mp3, mp4, m4a, wav</p>
-  <p class="drop-lang">
-    <label for="language">{{ t("recording_language") }}</label>
-    <select id="language" class="select" name="language">
-      {% for code in recording_langs %}
-      <option value="{{ code }}"{% if code == default_lang %} selected{% endif %}>{{ language_name(code) }}</option>
-      {% endfor %}
-    </select>
-  </p>
-  <p class="drop-picking">{{ t("drop_picking") }}</p>
+  <p class="drop-caption">{% if app_mode %}mp3, mp4, mov, m4a, wav, aiff, caf, flac{% else %}mp3, mp4, m4a, wav{% endif %}</p>
+  <p class="drop-picking"><span class="spinner" aria-hidden="true"></span>{{ t("drop_picking") }}</p>
+  {% if app_mode %}
+  <p class="drop-adding" id="drop-adding"><span class="spinner" aria-hidden="true"></span>{{ t("adding") }}</p>
+  {% endif %}
   <div class="drop-progress" id="upload-box" hidden>
     <span class="drop-progress-label" id="upload-label">{{ t("uploading") }}</span>
+    <span class="num drop-progress-pct" id="upload-pct">0%</span>
     <progress id="upload-progress" max="100" value="0" aria-labelledby="upload-label"></progress>
-    <span class="num" id="upload-pct">0%</span>
   </div>
   <div id="drop-status" class="drop-status" aria-live="polite"></div>
 </section>
-<p class="note" id="drop-note">{{ t("drop_note") }}</p>
+<div class="drop-lang" data-tour="language">
+  <span class="i i-globe" aria-hidden="true"></span>
+  <label for="language">{{ t("recording_language") }}</label>
+  <select id="language" class="select" name="language">
+    {% for code in recording_langs %}
+    <option value="{{ code }}"{% if code == default_lang %} selected{% endif %}>{{ language_name(code) }}</option>
+    {% endfor %}
+  </select>
+</div>
+<p class="note" id="drop-note">{% if app_mode %}{{ t("drop_note_app") }} <a href="/settings#data-title">{{ t("drop_note_more") }}</a>{% else %}{{ t("drop_note") }}{% endif %}</p>
+</div>
 
-<section class="section" aria-labelledby="queue-title">
+<section class="upload-queue" aria-labelledby="queue-title" data-tour="queue">
   <h2 class="section-title" id="queue-title">{{ t("queue") }}</h2>
   {% include "_queue.html" %}
 </section>
+</div>
+{% endblock %}
+
+{% block overlay %}
+{# First-run tips (app.js, window.transcribatorTour). Text comes in data-* attributes:
+   CSP allows no inline scripts. The card is a modal dialog over a dimmed page with a cutout
+   around the part being explained. In the app the tips start by themselves until they are
+   finished or skipped once (data-autostart; data-remember sends POST /tour/seen). #}
+<div id="tour" class="tour" hidden
+  data-count="{{ t("tour_count") }}"
+  data-next="{{ t("tour_next") }}"
+  data-done="{{ t("tour_done") }}"{% if app_mode %}
+  data-remember{% endif %}{% if tour_auto %}
+  data-autostart{% endif %}>
+  <div class="tour-shade"></div>
+  <div class="tour-spot" aria-hidden="true"></div>
+  <section class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body" tabindex="-1">
+    <span class="tour-arrow" aria-hidden="true"></span>
+    <div class="tour-top">
+      <span class="tour-dots" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <span class="tour-count num" id="tour-count"></span>
+    </div>
+    <div class="tour-content">
+      <h2 class="tour-title" id="tour-title"></h2>
+      <p class="tour-body" id="tour-body"></p>
+    </div>
+    <div class="tour-actions">
+      <button type="button" class="btn btn-ghost btn-sm tour-skip" data-tour-action="skip">{{ t("tour_skip") }}</button>
+      <button type="button" class="btn btn-sm" data-tour-action="back">{{ t("tour_back") }}</button>
+      <button type="button" class="btn btn-primary btn-sm tour-next" data-tour-action="next">{{ t("tour_next") }}</button>
+    </div>
+  </section>
+  <ol class="tour-steps" hidden>
+    <li data-target="drop" data-place="bottom" data-title="{{ t("tour_drop_title") }}" data-body="{{ t("tour_drop_body") }}"></li>
+    <li data-target="language" data-place="bottom" data-title="{{ t("tour_language_title") }}" data-body="{{ t("tour_language_body") }}"></li>
+    <li data-target="queue" data-place="bottom" data-cap="280" data-title="{{ t("tour_queue_title") }}" data-body="{{ t("tour_queue_body_app") if app_mode else t("tour_queue_body") }}"></li>
+    <li data-target="archive"{% if app_mode %} data-also="settings"{% endif %} data-place="bottom" data-title="{{ t("tour_archive_title") }}" data-body="{{ t("tour_archive_body") }}{% if app_mode %} {{ t("tour_archive_settings") }}{% endif %}"></li>
+  </ol>
+</div>
+<div id="tour-live" class="visually-hidden" aria-live="polite"></div>
 {% endblock %}

@@ -1,11 +1,14 @@
 """FluidAudio (Swift, CoreML and the Neural Engine): Parakeet v3 ASR and offline diarization.
 
 Called as the external program `fluidaudiocli`, built from source. The path
-is set by `TRANSCRIBATOR_FLUIDAUDIO_CLI`. The program only ever receives the temporary
-normalized WAV from `LocalEngine`, so the recording's name ends up neither in the
-arguments nor in the `audioFile` field of its JSON. The program's output is not read
-(except the "no speech" marker): it may contain meeting text. The JSON is written to a
-temporary folder and deleted right after parsing.
+is set by `TRANSCRIBATOR_FLUIDAUDIO_CLI`. In the app (`TRANSCRIBATOR_MODELS_DIR` set) the
+models come from the app's models directory: ASR through `--model-dir`, diarization through
+`CFFIXED_USER_HOME` (FluidAudio has no flag for it and looks in
+`~/Library/Application Support/FluidAudio/Models` of that home).
+The program only ever receives the temporary normalized WAV from `LocalEngine`, so the
+recording's name ends up neither in the arguments nor in the `audioFile` field of its JSON.
+The program's output is not read (except the "no speech" marker): it may contain meeting
+text. The JSON is written to a temporary folder and deleted right after parsing.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ from typing import Any
 
 from transcribator.backends.errors import BackendError
 from transcribator.models import SpeakerTurn, Word
+from transcribator.modelstore import models_dir
 
 CLI_ENV = "TRANSCRIBATOR_FLUIDAUDIO_CLI"
 # Same override as scripts/install_fluidaudio.sh uses for the install location.
@@ -33,6 +37,7 @@ DEFAULT_CLI = _TOOLS / "bin/fluidaudiocli"
 # expects the model repository directory itself. Diarization has no such flag and uses
 # the shared cache.
 DEFAULT_ASR_MODEL_DIR = _TOOLS / "models/parakeet-tdt-0.6b-v3"
+ASR_MODEL_NAME = "parakeet-tdt-0.6b-v3"
 TIMEOUT_S = 3 * 3600
 NO_SPEECH = "fluidaudio_no_speech"
 # Marker in stderr when offline diarization found no speech (exit code 1). It is the only
@@ -46,6 +51,20 @@ def cli_path() -> Path:
     return Path(os.environ.get(CLI_ENV) or DEFAULT_CLI)
 
 
+def asr_model_dir() -> Path:
+    root = models_dir()
+    return root / ASR_MODEL_NAME if root is not None else DEFAULT_ASR_MODEL_DIR
+
+
+def cli_env() -> dict[str, str] | None:
+    """Environment for the program: in the app, a home directory inside the models
+    directory, so FluidAudio finds the diarization models (and keeps its caches) there."""
+    root = models_dir()
+    if root is None:
+        return None
+    return {**os.environ, "CFFIXED_USER_HOME": str(root / "home")}
+
+
 def run_cli(args: list[str]) -> None:
     """Run `fluidaudiocli` without a shell or stdin; output is discarded."""
     try:
@@ -56,6 +75,7 @@ def run_cli(args: list[str]) -> None:
             stderr=subprocess.PIPE,
             check=False,
             timeout=TIMEOUT_S,
+            env=cli_env(),
         )
     except FileNotFoundError:
         raise BackendError("fluidaudio_missing") from None
@@ -87,13 +107,13 @@ class FluidAudioTranscriber:
         # int8-v2: a rebuilt int8 encoder that works around issue #760. On the synthetic
         # Russian sample it fixed a misheard word that plain int8 got wrong.
         encoder_precision: str = "int8-v2",
-        model_dir: Path = DEFAULT_ASR_MODEL_DIR,
+        model_dir: Path | None = None,
         run: Runner = run_cli,
     ) -> None:
         self._language = language
         self._model_version = model_version
         self._encoder_precision = encoder_precision
-        self._model_dir = model_dir
+        self._model_dir = model_dir or asr_model_dir()
         self._run = run
 
     def transcribe(self, wav_path: Path, turns: Sequence[SpeakerTurn]) -> list[Word]:

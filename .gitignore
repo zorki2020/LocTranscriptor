@@ -48,9 +48,13 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.build/
+# Icon variants for the owner to choose from (the chosen one is in AppIcon.icns)
+macos/App/Icon/previews/
 
 
 # macOS and editors
 .DS_Store
 .idea/
 .vscode/
+macos/App/Resources/AppIcon.icns

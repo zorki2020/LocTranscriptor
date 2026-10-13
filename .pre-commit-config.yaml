@@ -9,9 +9,9 @@ repos:
       - id: check-merge-conflict
       # Vendored third-party files stay byte for byte (SHA-256 in THIRD_PARTY_NOTICES.md).
       - id: end-of-file-fixer
-        exclude: ^src/transcribator/web/static/htmx\.min\.js$
+        exclude: ^src/transcribator/web/static/(htmx\.min\.js|vendor/)
       - id: trailing-whitespace
-        exclude: ^src/transcribator/web/static/htmx\.min\.js$
+        exclude: ^src/transcribator/web/static/(htmx\.min\.js|vendor/)
       - id: check-yaml
       - id: check-toml
 

@@ -43,6 +43,7 @@ _ERRORS = {
     "not_a_file": "err_not_a_file",
     "bad_path": "err_bad_path",
     "ffmpeg_missing": "err_ffmpeg_missing",
+    "audio_tool_missing": "err_prepare_failed",
     "normalize_failed": "err_prepare_failed",
     "cut_failed": "err_prepare_failed",
     "bad_result": "err_bad_result",
@@ -178,8 +179,8 @@ def error_text(code: str | None) -> str:
 
 
 def file_error(code: str) -> str:
-    """Reply to an unsuitable file when adding it."""
-    return t("file_rejected", text=error_text(code), code=code)
+    """Reply to an unsuitable file when adding it: what happened, what to do, the code."""
+    return f"{error_text(code)} {t('error_code', code=code)}"
 
 
 def speaker_classes(labels: Iterable[str]) -> dict[str, str]:

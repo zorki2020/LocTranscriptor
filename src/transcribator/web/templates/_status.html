@@ -1,16 +1,17 @@
 {# Status of a meeting that isn't done. While it is queued or processing, the block
    polls the server; on a final status the server answers with HX-Refresh and the page
    reloads with the transcript or the error. #}
-<section id="status" class="state" aria-label="{{ t("status_label") }}"{% if meeting.status in ("queued", "processing") %} data-poll hx-get="/meetings/{{ meeting.id }}/status" hx-trigger="every 3s, queue-changed from:body" hx-swap="outerHTML"{% endif %}>
+<section id="status" class="state state-{{ meeting.status }}" aria-label="{{ t("status_label") }}"{% if meeting.status in ("queued", "processing") %} data-poll hx-get="/meetings/{{ meeting.id }}/status" hx-trigger="every 3s, queue-changed from:body" hx-swap="outerHTML"{% endif %}>
   <p class="state-line">
     <span class="chip chip-{{ meeting.status }}">{{ status_label(meeting.status, stage) }}</span>
     {% if meeting.status == "processing" and started %}<span class="num">{{ t("running_for", time=started|elapsed) }}</span>{% endif %}
   </p>
+  {% if meeting.status == "processing" %}<span class="state-bar" aria-hidden="true"></span>{% endif %}
   {% if meeting.status == "error" %}
   <p class="state-text">{{ error_text(meeting.error_code) }} <span class="code">{{ t("error_code", code=meeting.error_code or "unknown") }}</span></p>
-  <p><button type="button" class="btn btn-primary" hx-post="/meetings/{{ meeting.id }}/retry?back=meeting" hx-target="#actions-msg" hx-disabled-elt="this">{{ t("retry_processing") }}</button></p>
+  <p><button type="button" class="btn btn-primary" hx-post="/meetings/{{ meeting.id }}/retry?back=meeting" hx-target="#actions-msg" hx-disabled-elt="this"><span class="i i-refresh" aria-hidden="true"></span>{{ t("retry") }}</button></p>
   {% else %}
-  <p class="state-text">{{ t("status_wait") }} <a href="/">{{ t("status_wait_link") }}</a>{{ t("status_wait_end") }}</p>
+  <p class="state-text">{{ t("status_wait") }}</p>
   {% endif %}
   <div id="actions-msg" aria-live="polite"></div>
 </section>

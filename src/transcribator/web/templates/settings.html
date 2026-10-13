@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ t("title_settings") }}{% endblock %}
+{% block width %}narrow{% endblock %}
+{% block content %}
+<h1 class="page-title">{{ t("title_settings") }}</h1>
+
+<section class="group" aria-labelledby="lang-title">
+  <h2 class="group-title" id="lang-title">{{ t("settings_language") }}</h2>
+  {# Saved on change; the server answers with HX-Refresh and the page reloads in the new language. #}
+  <form id="settings-form" class="settings-form" hx-post="/settings" hx-trigger="change" hx-target="#settings-msg" hx-indicator="#settings-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="group-card">
+      <div class="group-row field">
+        <div class="field-text">
+          <label class="field-label" for="ui_lang">{{ t("settings_ui_lang") }}</label>
+        </div>
+        <select id="ui_lang" class="select" name="ui_lang">
+          {% for code in ui_langs %}
+          <option value="{{ code }}" lang="{{ code }}"{% if code == ui_lang %} selected{% endif %}>{{ t("lang_native_" ~ code) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="group-row field">
+        <div class="field-text">
+          <label class="field-label" for="recording_lang">{{ t("settings_recording_lang") }}</label>
+          <p class="field-hint" id="recording-hint">{{ t("settings_recording_hint") }}</p>
+        </div>
+        <select id="recording_lang" class="select" name="recording_lang" aria-describedby="recording-hint">
+          {% for code in recording_langs %}
+          <option value="{{ code }}"{% if code == recording_lang %} selected{% endif %}>{{ language_name(code) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <p class="settings-saving group-foot" aria-hidden="true"><span class="spinner" aria-hidden="true"></span>{{ t("settings_saving") }}</p>
+    <div id="settings-msg" class="group-msg" aria-live="polite"></div>
+  </form>
+</section>
+
+<section class="group" aria-labelledby="data-title">
+  <h2 class="group-title" id="data-title">{{ t("settings_data") }}</h2>
+  <div class="group-card">
+    <div class="group-row group-row-stack">
+      <p class="settings-text">{{ t("settings_data_text") }}</p>
+      <div class="settings-path"><span class="i i-folder" aria-hidden="true"></span><code class="path">{{ data_dir }}</code>{% if app_mode %} <button type="button" class="btn btn-sm" data-bridge="revealData">{{ t("settings_reveal") }}</button>{% endif %}</div>
+    </div>
+    <div class="group-row group-row-stack">
+      <p class="settings-text">{{ t("settings_log_text") }}</p>
+      <div class="settings-path"><span class="i i-folder" aria-hidden="true"></span><code class="path">{{ log_dir }}</code></div>
+    </div>
+  </div>
+  <p class="group-foot">{{ t("settings_data_sources") }}</p>
+</section>
+
+<section class="group" aria-labelledby="privacy-title">
+  <h2 class="group-title" id="privacy-title">{{ t("settings_privacy") }}</h2>
+  <div class="group-card">
+    <div class="group-row group-row-icon">
+      <span class="group-icon group-icon-ok" aria-hidden="true"><span class="i i-shield"></span></span>
+      <p class="settings-text">{{ t("privacy_local") }} {{ t("settings_privacy_text") }}</p>
+    </div>
+  </div>
+</section>
+
+{% endblock %}

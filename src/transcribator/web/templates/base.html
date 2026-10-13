@@ -1,5 +1,9 @@
 <!doctype html>
-<html lang="{{ ui_lang }}" translate="no">
+{# "dark-theme" only lets the vendored dark palette match: that palette is linked under
+   prefers-color-scheme: dark, so in a light appearance the class does nothing.
+   "is-loading" keeps transitions off until app.js sees the page loaded: otherwise
+   controls would animate from browser defaults on every page load. #}
+<html lang="{{ ui_lang }}" translate="no" class="dark-theme is-loading">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,8 +13,16 @@
 <meta name="csrf-token" content="{{ csrf }}">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"historyCacheSize":0,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>
 {# The title is fixed and holds no meeting content: it goes into browser history,
-   which may be synced to the cloud. #}
-<title>{% block title %}{% endblock %} · {{ t("app_name") }}</title>
+   which may be synced to the cloud. The app window shows it as the window title, so
+   there it is the page name alone. #}
+<title>{% block title %}{% endblock %}{% if not app_mode %} · {{ t("app_name") }}{% endif %}</title>
+{# Linked rather than @imported: links block rendering and scripts until they load. #}
+{% for scale in ("sand", "sand-alpha", "indigo", "indigo-alpha", "red", "green", "amber") %}
+<link rel="stylesheet" href="/static/vendor/radix-colors/{{ scale }}.css">
+{% endfor %}
+{% for scale in ("sand", "sand-alpha", "indigo", "indigo-alpha", "red", "green", "amber") %}
+<link rel="stylesheet" href="/static/vendor/radix-colors/{{ scale.replace("-alpha", "-dark-alpha") if "alpha" in scale else scale ~ "-dark" }}.css" media="(prefers-color-scheme: dark)">
+{% endfor %}
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/htmx.min.js" defer></script>
 <script src="/static/app.js" defer></script>
@@ -19,16 +31,20 @@
 <a class="skip" href="#main">{{ t("skip_to_content") }}</a>
 <header class="nav">
   <div class="nav-inner">
-    <a class="brand" href="/">{{ t("app_name") }}</a>
     <nav class="nav-links" aria-label="{{ t("nav_label") }}">
       <a href="/"{% if nav == "add" %} aria-current="page"{% endif %}>{{ t("nav_upload") }}</a>
-      <a href="/meetings"{% if nav == "list" %} aria-current="page"{% endif %}>{{ t("nav_archive") }}</a>
+      <a href="/meetings" data-tour="archive"{% if nav == "list" %} aria-current="page"{% endif %}>{{ t("nav_archive") }}</a>
+      {% if app_mode %}
+      <a href="/settings" data-tour="settings"{% if nav == "settings" %} aria-current="page"{% endif %}>{{ t("nav_settings") }}</a>
+      {% endif %}
     </nav>
-    <a class="nav-search" href="/meetings#search" aria-keyshortcuts="/">{{ t("nav_search") }} <kbd>/</kbd></a>
+    <a class="nav-search" href="/meetings#search" aria-keyshortcuts="/"><span class="i i-search" aria-hidden="true"></span><span class="nav-search-label">{{ t("nav_search") }}</span> <kbd>/</kbd></a>
   </div>
 </header>
-<main id="main" class="page">
+<main id="main" class="page page-{% block width %}wide{% endblock %}">
 {% block content %}{% endblock %}
 </main>
+{# Layers over the page (the first-run tips) sit outside <main>, so it can be made inert. #}
+{% block overlay %}{% endblock %}
 </body>
 </html>

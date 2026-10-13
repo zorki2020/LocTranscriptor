@@ -5,9 +5,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>local.transcribator.menubar</string>
 	<key>CFBundleName</key>
-	<string>Transcribator</string>
+	<string>LocTranscriptor</string>
 	<key>CFBundleDisplayName</key>
-	<string>Transcribator</string>
+	<string>LocTranscriptor</string>
 	<key>CFBundleExecutable</key>
 	<string>Transcribator</string>
 	<key>CFBundlePackageType</key>

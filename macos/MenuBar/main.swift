@@ -15,9 +15,9 @@ enum L10n {
 
     private static func pick(_ en: String, _ ru: String) -> String { isRussian ? ru : en }
 
-    static let appName = "Transcribator"
+    static let appName = "LocTranscriptor"
 
-    static var checking: String { pick("Checking…", "Проверяю…") }
+    static var checking: String { pick("Checking…", "Проверяется…") }
     static var stopped: String { pick("Stopped", "Остановлен") }
     static var starting: String { pick("Starting…", "Запускается…") }
     static var running: String { pick("Running", "Работает") }
@@ -26,7 +26,7 @@ enum L10n {
     static func processing(_ n: Int) -> String { pick("\(n) processing", "обрабатывается \(n)") }
     static func failed(_ n: Int) -> String { pick("\(n) failed", "ошибок \(n)") }
 
-    static var open: String { pick("Open Transcribator", "Открыть Транскрибатор") }
+    static var open: String { pick("Open LocTranscriptor", "Открыть LocTranscriptor") }
     static var start: String { pick("Start", "Запустить") }
     static var stop: String { pick("Stop", "Остановить") }
     static var startedManually: String { pick("Started manually", "Запущен вручную") }

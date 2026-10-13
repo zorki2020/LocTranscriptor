@@ -11,6 +11,12 @@ The Mac stays awake for the whole job (`caffeinate -i`). Errors are stored as co
 only. There is no summary: the user needs only the transcript.
 On startup, jobs interrupted by a crash go back to the queue, and leftover temporary
 files and forgotten upload copies are deleted.
+
+Recognition is serialized per macOS user, not only per data directory: the app and a
+service installed from source may run side by side, and two recognitions at once don't fit
+in 16 GB. A worker takes a job only while it holds
+`~/Library/Caches/transcribator-recognition.lock`; otherwise its jobs stay queued.
+In the app the worker takes jobs only once the models are downloaded (`models_ready`).
 """
 
 from __future__ import annotations
@@ -21,16 +27,16 @@ import json
 import os
 import re
 import sqlite3
-import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, TypeVar
 
 from transcribator.backends.errors import BackendError
+from transcribator.interpreter import python_command
 from transcribator.models import Transcript
 from transcribator.paths import db_path, uploads_dir, work_dir
 from transcribator.pipeline.audio import AudioError
@@ -48,6 +54,7 @@ DB_RETRIES = 3
 SWEEP_S = 3600.0
 # Upload copy name: a random hex name only, no paths (same as in web/app.py).
 _UPLOAD_REF = re.compile(r"[0-9a-f]{32}")
+RECOGNITION_LOCK = Path.home() / "Library/Caches/transcribator-recognition.lock"
 
 OnStart = Callable[[int], None]
 Processor = Callable[[Path, Path, OnStart, str], Transcript]
@@ -71,10 +78,7 @@ def process_isolated(src: Path, work: Path, on_start: OnStart, language: str = "
     receives the child's PGID: the worker stores it to stop the orphan after a crash."""
     out = work / "transcript.json"
     metrics = work / "metrics.json"
-    cmd = [
-        sys.executable,
-        "-m",
-        "transcribator",
+    cmd = python_command(
         "process",
         str(src),
         "--language",
@@ -83,7 +87,7 @@ def process_isolated(src: Path, work: Path, on_start: OnStart, language: str = "
         str(out),
         "--metrics-json",
         str(metrics),
-    ]
+    )
     child = run_isolated(cmd, timeout_s=PROCESS_TIMEOUT_S, low_priority=True, on_start=on_start)
     if child.timed_out:
         raise JobError("timeout")
@@ -106,10 +110,14 @@ class Worker:
         *,
         processor: Processor = process_isolated,
         keep_awake: bool = True,
+        models_ready: Callable[[], bool] | None = None,
+        recognition_lock: Path | None = None,
     ) -> None:
         self._root = data_root
         self._processor = processor
         self._keep_awake = keep_awake
+        self._models_ready = models_ready
+        self._recognition_lock = recognition_lock
         self._conn = db.connect(db_path(data_root))
         self._lock: IO[str] | None = None
 
@@ -162,12 +170,17 @@ class Worker:
     # --- one job --------------------------------------------------------------------
 
     def run_once(self) -> bool:
-        """Process one job. False if the queue is empty."""
-        job = repo.claim_next(self._conn)
-        if job is None:
+        """Process one job. False if the queue is empty (or the models aren't there yet)."""
+        if self._models_ready is not None and not self._models_ready():
             return False
-        with keep_awake() if self._keep_awake else contextlib.nullcontext():
-            self._run(job)
+        with _recognition_turn(self._recognition_lock) as mine:
+            if not mine:
+                return False  # another installation is recognizing: the job stays queued
+            job = repo.claim_next(self._conn)
+            if job is None:
+                return False
+            with keep_awake() if self._keep_awake else contextlib.nullcontext():
+                self._run(job)
         return True
 
     def _source(self, job: repo.Job) -> Path:
@@ -252,3 +265,28 @@ class Worker:
                 busy = False
             if not busy:
                 event.wait(poll_s)
+
+
+@contextlib.contextmanager
+def _recognition_turn(path: Path | None) -> Iterator[bool]:
+    """Per-user lock around taking and running a job, without waiting: yields False if
+    another worker holds it. If the lock file can't be opened, the job runs anyway: the
+    lock only protects memory, not data."""
+    if path is None:
+        yield True
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a", encoding="utf-8")
+    except OSError:
+        yield True
+        return
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            yield False
+            return
+        yield True
+    finally:
+        handle.close()

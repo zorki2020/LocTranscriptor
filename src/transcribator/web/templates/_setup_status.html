@@ -1,0 +1,48 @@
+{% import "_macros.html" as m %}
+{# Model download state. While the download runs the block polls the server every second;
+   once the models are ready the server answers with HX-Redirect to the upload page. #}
+{% set phase = setup.phase %}
+{% set total = setup.total_bytes or 0 %}
+{% set done = setup.done_bytes or 0 %}
+{% set pct = (done * 100 // total) if total > 0 else 0 %}
+{% set pct = [[pct, 0]|max, 100]|min %}
+<div id="setup-status" class="setup-status setup-{{ phase }}" aria-live="polite"{% if phase in ("running", "verifying") %} data-poll hx-get="/setup/status" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+{% if phase in ("running", "verifying") %}
+  <div class="setup-progress">
+    <p class="setup-state"><span class="spinner" aria-hidden="true"></span>{{ t("setup_downloading") if phase == "running" else t("setup_verifying") }}</p>
+    <span class="num setup-pct">{{ 100 if phase == "verifying" else pct }}%</span>
+    <progress max="100" value="{{ 100 if phase == "verifying" else pct }}" aria-label="{{ t("setup_progress_label") }}"></progress>
+  </div>
+  <p class="setup-bytes num">{{ t("setup_progress", done=m.size(done), total=m.size(total)) }}</p>
+{% elif phase == "done" %}
+  <p class="setup-state setup-ok"><span class="i i-check-circle" aria-hidden="true"></span>{{ t("setup_done") }}</p>
+  <p><a class="btn btn-primary btn-lg" href="/">{{ t("setup_start_using") }}</a></p>
+{% elif phase == "error" %}
+  {% set code = setup.error or "unknown" %}
+  {% if code == "no_space" %}
+    {% set need = (total - done) if total > done else 0 %}
+    {% set text = t("setup_err_no_space", need=m.size(need), free=m.size(free_bytes)) %}
+  {% elif code in ("offline", "server_error", "checksum", "write_failed") %}
+    {% set text = t("setup_err_" ~ code) %}
+  {% else %}
+    {% set text = t("setup_err_unknown") %}
+  {% endif %}
+  {% if total > 0 and done > 0 %}
+  <div class="setup-progress">
+    <span class="num setup-pct">{{ pct }}%</span>
+    <progress max="100" value="{{ pct }}" aria-label="{{ t("setup_progress_label") }}"></progress>
+  </div>
+  {% endif %}
+  <p class="msg msg-error" role="alert">{{ text }} <span class="code">{{ t("setup_error_code", code=code) }}</span></p>
+  <p><button type="button" class="btn btn-primary btn-lg" hx-post="/setup/start" hx-target="#setup-status" hx-swap="outerHTML" hx-disabled-elt="this"><span class="i i-refresh" aria-hidden="true"></span>{{ t("setup_continue") }}</button></p>
+{% else %}
+  {% if done > 0 %}
+  <div class="setup-progress">
+    <span class="num setup-pct">{{ pct }}%</span>
+    <progress max="100" value="{{ pct }}" aria-label="{{ t("setup_progress_label") }}"></progress>
+  </div>
+  <p class="setup-bytes num">{{ t("setup_paused", done=m.size(done), total=m.size(total)) }}</p>
+  {% endif %}
+  <p><button type="button" class="btn btn-primary btn-lg" hx-post="/setup/start" hx-target="#setup-status" hx-swap="outerHTML" hx-disabled-elt="this"><span class="i i-download" aria-hidden="true"></span>{{ t("setup_resume") if done > 0 else t("setup_download") }}</button></p>
+{% endif %}
+</div>

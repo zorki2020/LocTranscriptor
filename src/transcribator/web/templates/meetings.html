@@ -9,6 +9,7 @@
 {# Search goes through htmx without changing the URL: the query stays out of browser history. #}
 <form id="search" class="search" action="/meetings" method="get" role="search">
   <label class="visually-hidden" for="q">{{ t("search_label") }}</label>
+  <span class="i i-search search-icon" aria-hidden="true"></span>
   <input id="q" class="search-input" type="search" name="q" value="{{ q }}" maxlength="200" placeholder="{{ t("search_label") }}" autocomplete="off" spellcheck="false" aria-keyshortcuts="/" hx-get="/meetings" hx-trigger="input changed delay:250ms, search" hx-sync="this:replace" hx-target="#results" hx-select="#results" hx-swap="outerHTML">
   <kbd class="search-kbd" aria-hidden="true">/</kbd>
 </form>
@@ -16,7 +17,7 @@
 <div id="results" class="results">
 {% if q %}
   {% if groups %}
-  <p class="results-meta" role="status">{{ t("search_summary", hits=plural("hits", hit_count), meetings=plural("in_meetings", groups|length)) }}{% if hit_count >= hit_limit %}{{ t("search_limited", limit=hit_limit) }}{% endif %}</p>
+  <p class="results-meta" role="status">{{ t("search_summary_limited" if hit_count >= hit_limit else "search_summary", hits=plural("hits", hit_count), meetings=plural("in_meetings", groups|length)) }}</p>
   <ol class="hit-groups" role="list">
     {% for g in groups %}
     <li class="hit-group">
@@ -34,6 +35,7 @@
   </ol>
   {% else %}
   <div class="empty-state" role="status">
+    <span class="empty-icon" aria-hidden="true"><span class="i i-search"></span></span>
     <p class="empty-title">{{ t("search_nothing", q=q) }}</p>
     <p class="empty-text">{{ t("search_nothing_hint") }}</p>
   </div>
@@ -41,24 +43,27 @@
 {% elif items %}
   <ul class="rows archive" role="list">
     {% for m in items %}
+    {% set dur = m.duration_s|human_duration %}
     <li class="row a-row">
-      <div class="row-head">
+      <span class="a-head">
         <a class="row-title" href="/meetings/{{ m.id }}">{{ m.title }}</a>
         {% if m.status != "done" %}<span class="chip chip-{{ m.status }}">{{ status_label(m.status, m.job_stage) }}</span>{% endif %}
-        <span class="row-date num" title="{{ m.recorded_at|human_date }}">{{ m.recorded_at|short_date }}</span>
-      </div>
-      {% set dur = m.duration_s|human_duration %}
-      {% if dur or m.speakers %}
-      <p class="row-meta num">{% if dur %}<span>{{ dur }}</span>{% endif %}{% if m.speakers %}<span>{{ plural("speakers", m.speakers) }}</span>{% endif %}</p>
-      {% endif %}
+      </span>
+      <span class="a-meta num">
+        <span class="a-date" title="{{ m.recorded_at|human_date }}">{{ m.recorded_at|short_date }}</span>
+        <span class="a-dur">{{ dur }}</span>
+        <span class="a-spk">{% if m.speakers %}{{ plural("speakers", m.speakers) }}{% endif %}</span>
+      </span>
+      <span class="i i-chevron-right a-go" aria-hidden="true"></span>
     </li>
     {% endfor %}
   </ul>
 {% else %}
   <div class="empty-state">
+    <span class="empty-icon" aria-hidden="true"><span class="i i-file-text"></span></span>
     <p class="empty-title">{{ t("archive_empty") }}</p>
     <p class="empty-text">{{ t("archive_empty_hint") }}</p>
-    <a class="btn btn-primary" href="/">{{ t("add_recording") }}</a>
+    <a class="btn btn-primary" href="/"><span class="i i-upload" aria-hidden="true"></span>{{ t("add_recording") }}</a>
   </div>
 {% endif %}
 </div>

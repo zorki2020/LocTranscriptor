@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}{{ t("title_error") }}{% endblock %}
+{% block width %}narrow{% endblock %}
 {% block content %}
 <section class="state-page">
+  <span class="empty-icon empty-icon-error" aria-hidden="true"><span class="i i-alert"></span></span>
   <h1 class="page-title">{{ text }}</h1>
-  <p class="state-actions"><a class="btn" href="/meetings">{{ t("open_archive") }}</a> <a class="link-quiet" href="/">{{ t("add_recording") }}</a></p>
+  <p class="state-actions"><a class="btn" href="/meetings">{{ t("open_archive") }}</a> <a class="btn btn-ghost" href="/">{{ t("add_recording") }}</a></p>
 </section>
 {% endblock %}

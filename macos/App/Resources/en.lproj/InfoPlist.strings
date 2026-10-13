@@ -1,0 +1,9 @@
+/* Names and the texts macOS shows when LocTranscriptor first reads a recording from a protected folder. */
+"CFBundleName" = "LocTranscriptor";
+"CFBundleDisplayName" = "LocTranscriptor";
+"NSHumanReadableCopyright" = "LocTranscriptor. MIT License.";
+"NSDocumentsFolderUsageDescription" = "LocTranscriptor reads the meeting recordings you choose or drop into its window. They stay on this Mac.";
+"NSDesktopFolderUsageDescription" = "LocTranscriptor reads the meeting recordings you choose or drop into its window. They stay on this Mac.";
+"NSDownloadsFolderUsageDescription" = "LocTranscriptor reads the meeting recordings you choose or drop into its window, and saves exported transcripts where you ask. Everything stays on this Mac.";
+"NSRemovableVolumesUsageDescription" = "LocTranscriptor reads meeting recordings from external drives when you choose them. They stay on this Mac.";
+"NSNetworkVolumesUsageDescription" = "LocTranscriptor reads meeting recordings from network drives when you choose them. Nothing is sent anywhere.";

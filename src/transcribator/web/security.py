@@ -6,6 +6,9 @@ So on every request:
 - `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>` (DNS rebinding);
 - state-changing requests (anything but GET and HEAD) must carry the `Origin` of this
   same service and the CSRF token in the `X-CSRF-Token` header or the `csrf` form field;
+- in the app, every request (pages, static files, API) must also carry the access key
+  in the `tb_key` cookie. The key is random per app launch and known only to the app's
+  window, so a browser or another local program gets 403 even on GET;
 - every response gets CSP, no-framing, no-referrer and same-origin CORP/COOP headers
   (other pages can't embed responses or hold a reference to the window).
 
@@ -39,6 +42,7 @@ _SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
     (b"cross-origin-opener-policy", b"same-origin"),
 ]
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
+KEY_COOKIE = "tb_key"
 
 # String keys: the text is picked in the interface language when the response is sent.
 _FORBIDDEN = "http_403"
@@ -93,11 +97,27 @@ async def _read_capped(receive: Receive, limit: int) -> bytes:
 class LocalOnlyMiddleware:
     """Host, Origin and CSRF checks plus security headers on every response."""
 
-    def __init__(self, app: ASGIApp, *, port: int, csrf_token: str) -> None:
+    def __init__(
+        self, app: ASGIApp, *, port: int, csrf_token: str, access_key: str | None = None
+    ) -> None:
         self.app = app
         self.hosts = frozenset({f"127.0.0.1:{port}", f"localhost:{port}"})
         self.origins = frozenset({f"http://127.0.0.1:{port}", f"http://localhost:{port}"})
         self.csrf_token = csrf_token
+        self.access_key = access_key
+
+    def _key_ok(self, scope: Scope) -> bool:
+        if self.access_key is None:
+            return True
+        expected = self.access_key.encode()
+        for name, value in scope.get("headers", []):
+            if name != b"cookie":
+                continue
+            for pair in bytes(value).split(b";"):
+                key, _, candidate = pair.strip().partition(b"=")
+                if key == KEY_COOKIE.encode() and hmac.compare_digest(candidate, expected):
+                    return True
+        return False
 
     def _token_ok(self, candidates: Iterable[str]) -> bool:
         expected = self.csrf_token.encode()
@@ -109,7 +129,7 @@ class LocalOnlyMiddleware:
                 await self.app(scope, receive, send)
             return  # websockets and the rest are not served
 
-        if _header(scope, b"host") not in self.hosts:
+        if _header(scope, b"host") not in self.hosts or not self._key_ok(scope):
             await _plain(send, 403, _FORBIDDEN)
             return
 

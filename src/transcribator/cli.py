@@ -1,6 +1,7 @@
 """Command-line interface.
 
     transcribator serve [--port 8765]                  (web UI on 127.0.0.1)
+    transcribator serve --app --port 0 --parent-pid N  (started by LocTranscriptor.app)
 
     transcribator models download --stack fluidaudio     (the only command that uses the network)
     transcribator process meeting.mp4 --stack fluidaudio
@@ -33,7 +34,7 @@ from transcribator.i18n import RECORDING_LANGS, default_recording_lang
 from transcribator.models import RawResult
 from transcribator.offline import allow_download, enforce_offline
 from transcribator.paths import DataDirError
-from transcribator.pipeline.audio import AudioError
+from transcribator.pipeline.audio import SANDBOXED_ENV, AudioError
 from transcribator.pipeline.format_md import render_markdown
 from transcribator.pipeline.interfaces import Engine
 from transcribator.pipeline.merge import merge_result
@@ -49,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
         allow_download()
     else:
         enforce_offline()
+    if args.handler is not _cmd_process:
+        # Set by run_isolated for its sandboxed child only; anywhere else it would turn
+        # off the audio helper's sandbox.
+        os.environ.pop(SANDBOXED_ENV, None)
     # Results and temporary files contain meeting text: user-only.
     os.umask(0o077)
     _exit_cleanly_on_signals()
@@ -170,7 +175,13 @@ def _build_parser() -> argparse.ArgumentParser:
     wer.set_defaults(handler=_cmd_wer)
 
     serve = sub.add_parser("serve", help="web UI on 127.0.0.1 and the queue worker")
-    serve.add_argument("--port", type=_port, default=8765)
+    serve.add_argument("--port", type=_port, default=8765, help="0 picks a free port (--app)")
+    serve.add_argument(
+        "--app",
+        action="store_true",
+        help="mode of LocTranscriptor.app: access key on stdin, ready line on stdout",
+    )
+    serve.add_argument("--parent-pid", type=int, default=None, help=argparse.SUPPRESS)
     serve.set_defaults(handler=_cmd_serve)
 
     autostart = sub.add_parser("autostart", help="start at macOS login and the menu bar icon")
@@ -204,15 +215,37 @@ def _cmd_autostart(args: argparse.Namespace) -> int:
 
 def _port(value: str) -> int:
     number = int(value)
-    if not 1024 <= number <= 65535:
-        raise argparse.ArgumentTypeError("port must be between 1024 and 65535")
+    if number != 0 and not 1024 <= number <= 65535:
+        raise argparse.ArgumentTypeError("port must be 0 or between 1024 and 65535")
     return number
+
+
+# Exit codes of `serve --app` that the app tells apart from a crash.
+APP_EXIT_ALREADY_RUNNING = 75
+APP_EXIT_CONFIG = 2
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
     from transcribator.autostart import trim_log, under_launchd  # noqa: PLC0415
-    from transcribator.serve import AlreadyRunning, run_server  # noqa: PLC0415
+    from transcribator.serve import (  # noqa: PLC0415
+        AlreadyRunning,
+        BadAccessKey,
+        run_app_server,
+        run_server,
+    )
 
+    if args.app:
+        try:
+            return run_app_server(args.port, parent_pid=args.parent_pid, key_stream=sys.stdin)
+        except AlreadyRunning:
+            print("The service is already running with this data directory", file=sys.stderr)
+            return APP_EXIT_ALREADY_RUNNING
+        except BadAccessKey:
+            print("No valid access key on stdin", file=sys.stderr)
+            return APP_EXIT_CONFIG
+    if args.port == 0:
+        print("Port 0 is only for --app", file=sys.stderr)
+        return 2
     if under_launchd():
         trim_log()
     try:

@@ -1,0 +1,9 @@
+/* Название и тексты, которые macOS показывает, когда LocTranscriptor впервые читает запись из защищённой папки. */
+"CFBundleName" = "LocTranscriptor";
+"CFBundleDisplayName" = "LocTranscriptor";
+"NSHumanReadableCopyright" = "LocTranscriptor. Лицензия MIT.";
+"NSDocumentsFolderUsageDescription" = "LocTranscriptor читает записи встреч, которые вы выбрали или перетащили в окно программы. Записи остаются на этом Mac.";
+"NSDesktopFolderUsageDescription" = "LocTranscriptor читает записи встреч, которые вы выбрали или перетащили в окно программы. Записи остаются на этом Mac.";
+"NSDownloadsFolderUsageDescription" = "LocTranscriptor читает записи встреч, которые вы выбрали или перетащили в окно программы, и сохраняет транскрипты туда, куда вы укажете. Всё остаётся на этом Mac.";
+"NSRemovableVolumesUsageDescription" = "LocTranscriptor читает записи встреч с внешних дисков, когда вы их выбираете. Записи остаются на этом Mac.";
+"NSNetworkVolumesUsageDescription" = "LocTranscriptor читает записи встреч с сетевых дисков, когда вы их выбираете. Ничего никуда не отправляется.";

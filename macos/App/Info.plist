@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: scripts/build_app.sh replaces __VERSION__ and __BUILD__. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>app.loctranscriptor.mac</string>
+	<key>CFBundleName</key>
+	<string>LocTranscriptor</string>
+	<key>CFBundleDisplayName</key>
+	<string>LocTranscriptor</string>
+	<key>CFBundleExecutable</key>
+	<string>LocTranscriptor</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>ru</string>
+	</array>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSArchitecturePriority</key>
+	<array>
+		<string>arm64</string>
+	</array>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<key>NSHumanReadableCopyright</key>
+	<string>LocTranscriptor. MIT License.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>LocTranscriptor reads the meeting recordings you choose or drop into its window. They stay on this Mac.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>LocTranscriptor reads the meeting recordings you choose or drop into its window. They stay on this Mac.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>LocTranscriptor reads the meeting recordings you choose or drop into its window, and saves exported transcripts where you ask. Everything stays on this Mac.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>LocTranscriptor reads meeting recordings from external drives when you choose them. They stay on this Mac.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>LocTranscriptor reads meeting recordings from network drives when you choose them. Nothing is sent anywhere.</string>
+</dict>
+</plist>

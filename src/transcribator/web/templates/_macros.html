@@ -1,0 +1,9 @@
+{# Shared helpers. Sizes are decimal (1 MB = 1,000,000 bytes), as Finder shows them. #}
+{% macro size(n) -%}
+{%- if n is not number or n <= 0 -%}{{ t("size_mb", n=0) }}
+{%- elif n >= 10000000000 -%}{{ t("size_gb", n=(n / 1000000000)|round|int) }}
+{%- elif n >= 1000000000 -%}{{ t("size_gb", n=("%.1f"|format(n / 1000000000))|replace(".", t("decimal_sep"))) }}
+{%- elif n >= 10000000 -%}{{ t("size_mb", n=(n / 1000000)|round|int) }}
+{%- else -%}{{ t("size_mb", n=("%.1f"|format(n / 1000000))|replace(".", t("decimal_sep"))) }}
+{%- endif -%}
+{%- endmacro %}
