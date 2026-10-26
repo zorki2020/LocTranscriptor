@@ -19,6 +19,9 @@ from transcribator.models import Segment, Transcript
 
 SOURCE_PATH = "path"
 SOURCE_UPLOAD = "upload"
+LAYOUT_MONO = "mono"
+LAYOUT_MIC_SYSTEM = "mic_system"
+LAYOUTS = (LAYOUT_MONO, LAYOUT_MIC_SYSTEM)
 _TOKEN = re.compile(r"\w+", re.UNICODE)
 
 
@@ -50,6 +53,7 @@ class Job:
     source_ref: str
     attempts: int
     language: str = "en"
+    layout: str = LAYOUT_MONO
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +86,7 @@ class Meeting:
     summary_error: str | None
     source_kind: str
     error_code: str | None
+    audio_ref: str | None = None
     segments: list[Segment] = field(default_factory=list)
     names: dict[str, str] = field(default_factory=dict)
     labels: list[str] = field(default_factory=list)
@@ -123,27 +128,71 @@ def enqueue(
     source_kind: str,
     source_ref: str,
     language: str = "en",
+    layout: str = LAYOUT_MONO,
 ) -> int:
     """Add a new meeting to the queue. Return the meeting id."""
     if source_kind not in (SOURCE_PATH, SOURCE_UPLOAD):
         raise ValueError("unknown source kind")
     if language not in RECORDING_LANGS:
         raise ValueError("unsupported language")
-    stamp = now_utc()
+    if layout not in LAYOUTS:
+        raise ValueError("unknown layout")
     with _tx(conn):
-        cur = conn.execute(
-            "INSERT INTO meeting"
-            " (title, recorded_at, added_at, status, source_kind, source_ref, language)"
-            " VALUES (?, ?, ?, 'queued', ?, ?, ?)",
-            (title, recorded_at, stamp, source_kind, source_ref, language),
-        )
-        meeting_id = int(cur.lastrowid or 0)
-        conn.execute(
-            "INSERT INTO job (meeting_id, state, created_at, updated_at)"
-            " VALUES (?, 'queued', ?, ?)",
-            (meeting_id, stamp, stamp),
-        )
+        return _insert_meeting(conn, title, recorded_at, source_kind, source_ref, language, layout)
+
+
+def _insert_meeting(
+    conn: sqlite3.Connection,
+    title: str,
+    recorded_at: str | None,
+    source_kind: str,
+    source_ref: str,
+    language: str,
+    layout: str,
+    audio_ref: str | None = None,
+) -> int:
+    """Insert a queued meeting and its job. Must run inside a transaction."""
+    stamp = now_utc()
+    cur = conn.execute(
+        "INSERT INTO meeting (title, recorded_at, added_at, status, source_kind, source_ref,"
+        " language, layout, audio_ref) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)",
+        (title, recorded_at, stamp, source_kind, source_ref, language, layout, audio_ref),
+    )
+    meeting_id = int(cur.lastrowid or 0)
+    conn.execute(
+        "INSERT INTO job (meeting_id, state, created_at, updated_at) VALUES (?, 'queued', ?, ?)",
+        (meeting_id, stamp, stamp),
+    )
     return meeting_id
+
+
+def enqueue_upload_once(
+    conn: sqlite3.Connection,
+    *,
+    title: str,
+    recorded_at: str | None,
+    source_ref: str,
+    language: str,
+    layout: str,
+    audio_ref: str | None = None,
+) -> int:
+    """Queue upload copy `source_ref` unless a meeting already uses it; return the meeting
+    id either way. The lookup and the insert share one write transaction, so two parallel
+    requests for the same file cannot make two meetings."""
+    if language not in RECORDING_LANGS:
+        raise ValueError("unsupported language")
+    if layout not in LAYOUTS:
+        raise ValueError("unknown layout")
+    with _tx(conn):
+        row = conn.execute(
+            "SELECT id FROM meeting WHERE source_kind = 'upload' AND source_ref = ? LIMIT 1",
+            (source_ref,),
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
+        return _insert_meeting(
+            conn, title, recorded_at, SOURCE_UPLOAD, source_ref, language, layout, audio_ref
+        )
 
 
 def claim_next(conn: sqlite3.Connection) -> Job | None:
@@ -164,7 +213,7 @@ def claim_next(conn: sqlite3.Connection) -> Job | None:
             (row["meeting_id"],),
         )
         source = conn.execute(
-            "SELECT source_kind, source_ref, language FROM meeting WHERE id = ?",
+            "SELECT source_kind, source_ref, language, layout FROM meeting WHERE id = ?",
             (row["meeting_id"],),
         ).fetchone()
     return Job(
@@ -174,6 +223,7 @@ def claim_next(conn: sqlite3.Connection) -> Job | None:
         source_ref=str(source["source_ref"]),
         attempts=int(row["attempts"]),
         language=str(source["language"]),
+        layout=str(source["layout"]),
     )
 
 
@@ -351,6 +401,7 @@ def get_meeting(conn: sqlite3.Connection, meeting_id: int) -> Meeting | None:
         summary_error=row["summary_error"],
         source_kind=str(row["source_kind"]),
         error_code=row["error_code"],
+        audio_ref=row["audio_ref"],
         segments=segments,
         names={str(s["label"]): str(s["display_name"]) for s in speakers if s["display_name"]},
         labels=[str(s["label"]) for s in speakers],
@@ -431,22 +482,42 @@ class MeetingBusy(Exception):
     """The meeting is being processed: it cannot be deleted, the worker would lose its file."""
 
 
-def delete_meeting(conn: sqlite3.Connection, meeting_id: int) -> tuple[str, str] | None:
-    """Delete a meeting completely. Return its source so the caller can delete the
-    temporary upload copy. Segments, speakers, the job and FTS rows go by cascade.
+@dataclass(frozen=True, slots=True)
+class RemovedMeeting:
+    """What a deleted meeting leaves behind on disk: the caller removes these files."""
+
+    source_kind: str
+    source_ref: str
+    audio_ref: str | None
+
+
+def remove_meeting(conn: sqlite3.Connection, meeting_id: int) -> RemovedMeeting | None:
+    """Delete a meeting completely. Return the files it referenced so the caller can delete
+    the temporary upload copy and the kept audio. Segments, speakers, the job and FTS rows
+    go by cascade.
 
     The status check and the deletion run in one transaction, so the worker cannot claim
     the job in between. A meeting being processed is not deleted (`MeetingBusy`)."""
     with _tx(conn):
         row = conn.execute(
-            "SELECT source_kind, source_ref, status FROM meeting WHERE id = ?", (meeting_id,)
+            "SELECT source_kind, source_ref, audio_ref, status FROM meeting WHERE id = ?",
+            (meeting_id,),
         ).fetchone()
         if row is None:
             return None
         if row["status"] == "processing":
             raise MeetingBusy
         conn.execute("DELETE FROM meeting WHERE id = ?", (meeting_id,))
-    return str(row["source_kind"]), str(row["source_ref"])
+    audio = row["audio_ref"]
+    return RemovedMeeting(
+        str(row["source_kind"]), str(row["source_ref"]), None if audio is None else str(audio)
+    )
+
+
+def audio_refs(conn: sqlite3.Connection) -> set[str]:
+    """Names of kept audio files referenced by meetings (for orphan cleanup)."""
+    rows = conn.execute("SELECT audio_ref FROM meeting WHERE audio_ref IS NOT NULL").fetchall()
+    return {str(r["audio_ref"]) for r in rows}
 
 
 def upload_refs(conn: sqlite3.Connection) -> set[str]:
@@ -455,6 +526,15 @@ def upload_refs(conn: sqlite3.Connection) -> set[str]:
         "SELECT source_ref FROM meeting WHERE source_kind = 'upload' AND status != 'done'"
     ).fetchall()
     return {str(r["source_ref"]) for r in rows}
+
+
+def upload_meeting(conn: sqlite3.Connection, ref: str) -> tuple[int, str] | None:
+    """The meeting that already uses upload copy `ref` as `(id, status)`, or None."""
+    row = conn.execute(
+        "SELECT id, status FROM meeting WHERE source_kind = 'upload' AND source_ref = ? LIMIT 1",
+        (ref,),
+    ).fetchone()
+    return None if row is None else (int(row["id"]), str(row["status"]))
 
 
 def set_child(conn: sqlite3.Connection, job_id: int, pgid: int | None) -> None:

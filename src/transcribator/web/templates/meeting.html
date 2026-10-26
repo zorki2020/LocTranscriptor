@@ -22,6 +22,7 @@
   </form>
   <div class="meeting-actions">
     {% if meeting.status == "done" %}<a class="btn" href="/meetings/{{ meeting.id }}.md" download><span class="i i-download" aria-hidden="true"></span>{{ t("export_md") }}</a>{% endif %}
+    {% if has_audio|default(false) %}<a class="btn" href="/meetings/{{ meeting.id }}/audio" download><span class="i i-download" aria-hidden="true"></span>{{ t("audio_download") }}</a>{% endif %}
     {% if meeting.status != "processing" %}<button type="button" class="btn btn-ghost btn-ghost-danger" data-dialog="delete-dialog"><span class="i i-trash" aria-hidden="true"></span>{{ t("delete_meeting") }}</button>{% endif %}
   </div>
 </header>
@@ -37,12 +38,12 @@
   <ul class="speaker-list" role="list">
     {% for s in speakers %}
     <li class="speaker {{ s.spk }}">
-      <button type="button" class="speaker-chip" aria-expanded="false" aria-controls="spk-form-{{ s.index }}"><span class="dot" aria-hidden="true"></span>{{ s.shown }}</button>
-      <form class="speaker-form" id="spk-form-{{ s.index }}" hidden hx-post="/meetings/{{ meeting.id }}/speakers" hx-target="find .form-msg">
+      <button type="button" class="speaker-chip" aria-expanded="false" aria-controls="spk-form-{{ s.index or "me" }}"><span class="dot" aria-hidden="true"></span>{{ s.shown }}</button>
+      <form class="speaker-form" id="spk-form-{{ s.index or "me" }}" hidden hx-post="/meetings/{{ meeting.id }}/speakers" hx-target="find .form-msg">
         <input type="hidden" name="csrf" value="{{ csrf }}">
         <input type="hidden" name="label" value="{{ s.label }}">
         <span class="dot" aria-hidden="true"></span>
-        <input class="inline inline-speaker" type="text" name="name" value="{{ s.name }}" maxlength="100" placeholder="{{ t("speaker_n", n=s.index) }}" autocomplete="off" spellcheck="false" aria-label="{{ t("speaker_name_for", name=s.shown) }}">
+        <input class="inline inline-speaker" type="text" name="name" value="{{ s.name }}" maxlength="100" placeholder="{{ t("speaker_me") if s.label == "ME" else t("speaker_n", n=s.index) }}" autocomplete="off" spellcheck="false" aria-label="{{ t("speaker_name_for", name=s.shown) }}">
         <span class="form-msg" aria-live="polite"></span>
       </form>
     </li>
@@ -70,7 +71,7 @@
 <dialog id="delete-dialog" class="dialog" aria-labelledby="delete-title" aria-describedby="delete-text">
   <div class="dialog-icon" aria-hidden="true"><span class="i i-trash"></span></div>
   <h2 class="dialog-title" id="delete-title">{{ t("delete_question") }}</h2>
-  <p class="dialog-text" id="delete-text">{{ t("delete_text") }}</p>
+  <p class="dialog-text" id="delete-text">{{ t("delete_text_audio") if has_audio|default(false) else t("delete_text") }}</p>
   <div id="delete-msg" aria-live="polite"></div>
   <div class="dialog-actions">
     <button type="button" class="btn" data-close autofocus>{{ t("cancel") }}</button>

@@ -31,14 +31,20 @@ from pathlib import Path
 from transcribator.backends.errors import BackendError
 from transcribator.eval import transcript_text, word_error_rate
 from transcribator.i18n import RECORDING_LANGS, default_recording_lang
-from transcribator.models import RawResult
+from transcribator.models import RawResult, Word
 from transcribator.offline import allow_download, enforce_offline
 from transcribator.paths import DataDirError
 from transcribator.pipeline.audio import SANDBOXED_ENV, AudioError
+from transcribator.pipeline.engine import LocalEngine
 from transcribator.pipeline.format_md import render_markdown
 from transcribator.pipeline.interfaces import Engine
 from transcribator.pipeline.merge import merge_result
-from transcribator.pipeline.run import ProcessResult, process_audio
+from transcribator.pipeline.run import (
+    LAYOUT_MIC_SYSTEM,
+    LAYOUT_MONO,
+    ProcessResult,
+    process_audio,
+)
 from transcribator.pipeline.tempfiles import cleanup_stale, job_prefix
 from transcribator.stacks import DEFAULT_STACK, STACKS
 
@@ -138,6 +144,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="transcript as JSON (for the worker); without --out no Markdown is written",
     )
+    # Channel layout of the recording (set by the worker for recordings made by the app).
+    # Not limited by `choices`: an unknown value must fail with an error code in metrics.
+    process.add_argument("--layout", default=LAYOUT_MONO, help=argparse.SUPPRESS)
     process.set_defaults(handler=_cmd_process)
 
     bench = sub.add_parser("bench", help="measure speed and memory; output has no names or text")
@@ -283,6 +292,25 @@ def _make_engine(args: argparse.Namespace) -> Engine:
     )
 
 
+def _make_mic_engine(args: argparse.Namespace, engine: Engine) -> Engine:
+    """Engine for the microphone channel of a two-channel recording: the same recognition
+    without diarization (the channel has one known speaker)."""
+    if args.engine == "fake":
+        from transcribator.backends.fake import FakeEngine  # noqa: PLC0415
+
+        return FakeEngine(_demo_mic_raw_result())
+    if isinstance(engine, LocalEngine):
+        return engine.without_diarization()
+    return engine  # its speaker turns are ignored for this channel
+
+
+def _demo_mic_raw_result() -> RawResult:
+    """Synthetic microphone channel for `--engine fake`: one reply that overlaps the end of
+    the fake dialogue."""
+    words = [Word(1.6, 2.0, "Добрый"), Word(2.1, 2.5, "день.")]
+    return RawResult(words=words, turns=[], timings={})
+
+
 def _cmd_process(args: argparse.Namespace) -> int:
     suffix = "fake" if args.engine == "fake" else args.stack
     out: Path | None = args.out
@@ -301,7 +329,9 @@ def _cmd_process(args: argparse.Namespace) -> int:
             print("Error: the output directory does not exist", file=sys.stderr)
             return 2
     try:
-        result = process_audio(args.input, _make_engine(args))
+        engine = _make_engine(args)
+        mic_engine = _make_mic_engine(args, engine) if args.layout == LAYOUT_MIC_SYSTEM else None
+        result = process_audio(args.input, engine, layout=args.layout, mic_engine=mic_engine)
     except (AudioError, BackendError) as exc:
         _write_metrics(args.metrics_json, {"error": exc.code})
         raise

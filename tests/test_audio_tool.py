@@ -149,3 +149,83 @@ def test_mp3_without_id3_after_padding_and_random_bytes(tmp_path: Path) -> None:
         noise.write_bytes(os.urandom(20_000))
         with pytest.raises(AudioError):
             audio.probe_duration(noise)
+
+
+def _two_tone_wav(path: Path, amp0: float, amp1: float, seconds: float = 2.0) -> None:
+    """Stereo 44.1 kHz: a different tone and level in each channel."""
+    rate = 44100
+    frames = bytearray()
+    for i in range(int(seconds * rate)):
+        for amp, freq in ((amp0, 440), (amp1, 660)):
+            sample = int(amp * 32767 * math.sin(2 * math.pi * freq * i / rate))
+            frames += sample.to_bytes(2, "little", signed=True)
+    with wave.open(str(path), "wb") as writer:
+        writer.setnchannels(2)
+        writer.setsampwidth(2)
+        writer.setframerate(rate)
+        writer.writeframes(bytes(frames))
+
+
+def _peak(path: Path) -> int:
+    """Largest absolute sample of a 16-bit mono WAV (test helper)."""
+    from array import array  # noqa: PLC0415
+
+    with wave.open(str(path), "rb") as reader:
+        samples = array("h", reader.readframes(reader.getnframes()))
+    return max(max(samples), -min(samples))
+
+
+@pytest.mark.usefixtures("use_tool")
+def test_split_writes_each_channel_as_mono_16k(tmp_path: Path) -> None:
+    src = tmp_path / "rec0123456789abcdef01234567"  # no extension: identified by content
+    _two_tone_wav(src, 0.5, 0.1)
+    out0, out1 = tmp_path / "ch0.wav", tmp_path / "ch1.wav"
+    audio.split_channels(src, out0, out1)
+    for out in (out0, out1):
+        _check_normalized(out, 2.0)
+    assert _peak(out0) == pytest.approx(0.5 * 32767, rel=0.05)
+    assert _peak(out1) == pytest.approx(0.1 * 32767, rel=0.05)
+
+
+@pytest.mark.usefixtures("use_tool")
+def test_split_refuses_mono_and_leaves_no_outputs(tmp_path: Path) -> None:
+    src = tmp_path / "mono"
+    with wave.open(str(src), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(16000)
+        writer.writeframes(b"\x10\x00" * 16000)
+    out0, out1 = tmp_path / "ch0.wav", tmp_path / "ch1.wav"
+    with pytest.raises(AudioError) as exc:
+        audio.split_channels(src, out0, out1)
+    assert exc.value.code == "not_two_channels"
+    assert not out0.exists() and not out1.exists()
+
+
+@pytest.mark.usefixtures("use_tool")
+def test_split_of_garbage_gives_code_and_no_outputs(tmp_path: Path) -> None:
+    junk = tmp_path / "junk"
+    junk.write_bytes(b"\x00" * 4000)
+    out0, out1 = tmp_path / "ch0.wav", tmp_path / "ch1.wav"
+    with pytest.raises(AudioError) as exc:
+        audio.split_channels(junk, out0, out1)
+    assert exc.value.code == "probe_failed"
+    assert not out0.exists() and not out1.exists()
+
+
+def test_split_output_is_json_without_names(tool: Path, tmp_path: Path) -> None:
+    src = tmp_path / "Встреча с Иваном.wav"
+    _two_tone_wav(src, 0.3, 0.3, seconds=0.5)
+    out0, out1 = tmp_path / "Иван0.wav", tmp_path / "Иван1.wav"
+    proc = subprocess.run(
+        [str(tool), "split", str(src), str(out0), str(out1)], capture_output=True, check=False
+    )
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == b'{"ok":true}'
+    assert proc.stderr == b""
+    same = subprocess.run(
+        [str(tool), "split", str(src), str(out0), str(out0)], capture_output=True, check=False
+    )
+    assert same.returncode == 1
+    assert same.stdout.strip() == b'{"error":"split_failed"}'
+    assert out0.exists()  # refused before writing: an existing file is not removed

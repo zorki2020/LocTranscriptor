@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let poller = StatusPoller()
     private var windowController: MainWindowController!
     private var statusItem: StatusItemController!
+    private var recorder: RecorderController!
     private var lang: Lang = .system()
     private var lastStatus: ServiceStatus?
     private var terminating = false
@@ -36,7 +37,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         windowController.onPageLoaded = { [weak self] in self?.refreshStatus() }
         windowController.onClose = { NSApp.setActivationPolicy(.accessory) }
 
+        recorder = RecorderController(
+            dataDirectory: supervisor.dataDirectory,
+            connection: { [weak self] in
+                guard let supervisor = self?.supervisor, let origin = supervisor.state.origin,
+                      let key = supervisor.state.key else { return nil }
+                return (origin, key)
+            },
+            lang: { [weak self] in self?.lang ?? .system() })
+        recorder.onStatus = { [weak self] status in self?.recordingChanged(status) }
+        windowController.recorder = recorder
+
         statusItem = StatusItemController()
+        statusItem.onToggleRecording = { [weak self] in self?.toggleRecording() }
         statusItem.onOpen = { [weak self] in self?.showMainWindow() }
         statusItem.onToggleLogin = { [weak self] in self?.toggleLoginItem() }
         statusItem.onQuit = { NSApp.terminate(nil) }
@@ -99,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let origin = state.origin, let key = state.key {
             windowController.load(origin: origin, key: key)
             refreshStatus()
+            recorder.serviceBecameAvailable()
         } else {
             lastStatus = nil
         }
@@ -133,10 +147,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatusItem() {
-        statusItem.update(state: supervisor.state, status: lastStatus, lang: lang, login: LoginItem.menuState)
+        statusItem.update(
+            state: supervisor.state, status: lastStatus, recording: recorder.status, lang: lang,
+            login: LoginItem.menuState)
         if let app = NSApp.mainMenu?.items.first?.submenu {
             app.item(withTag: MenuTag.openAtLogin)?.state = LoginItem.menuState
         }
+    }
+
+    // MARK: - Recording
+
+    private func recordingChanged(_ status: RecordingStatus) {
+        updateStatusItem()
+        windowController.pushRecording(status)
+    }
+
+    /// Menu bar: start with the saved settings, or stop.
+    private func toggleRecording() {
+        switch recorder.status.state {
+        case .starting, .recording:
+            Task { await recorder.stop() }
+        case .stopping:
+            break
+        case .idle, .queued, .failed:
+            Task {
+                if let error = await recorder.startFromMenu() { showRecordingError(error) }
+            }
+        }
+    }
+
+    private func showRecordingError(_ error: RecordingError) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = L10n.recordingError(error, lang)
+        alert.addButton(withTitle: Text.ok.string(lang))
+        let pane: RecordingSettingsPane? = switch error {
+        case .micDenied: .mic
+        case .startFailed: .systemAudio
+        default: nil
+        }
+        if pane != nil { alert.addButton(withTitle: Text.openSystemSettings.string(lang)) }
+        NSApp.activate()
+        if alert.runModal() == .alertSecondButtonReturn, let pane { recorder.openSettings(pane) }
+    }
+
+    /// Quit while recording: stop, save and queue, but wait at most 10 seconds. What does not
+    /// finish stays on disk and is queued at the next launch.
+    private func stopRecordingForQuit() async {
+        let gate = OneShot()
+        Task {
+            await recorder.stop()
+            gate.fire()
+        }
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            gate.fire()
+        }
+        await gate.wait()
     }
 
     // MARK: - Menu actions
@@ -239,14 +306,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // A small "Stopping…" window only if stopping takes more than a second.
-        let text = Text.stoppingWindow.string(lang)
         let reminder = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
             guard let self, !Task.isCancelled else { return }
-            let window = StatusViews.stoppingWindow(text: text)
+            let saving = self.recorder.status.state.isActive
+            let window = StatusViews.stoppingWindow(
+                text: (saving ? Text.recordingSaving : Text.stoppingWindow).string(self.lang))
             self.stoppingWindow = window
             window.orderFrontRegardless()
         }
+        // The service must still be up to take the finished recording.
+        if recorder.status.state.isActive { await stopRecordingForQuit() }
         await supervisor.stop()
         reminder.cancel()
         stoppingWindow?.orderOut(nil)

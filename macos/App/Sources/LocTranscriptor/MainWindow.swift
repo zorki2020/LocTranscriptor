@@ -62,6 +62,8 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
     var onRevealData: (() -> Void)?
     var onPageLoaded: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Recording behind the `recording.*` bridge messages.
+    var recorder: RecorderController?
     private var closeAfterFullScreen = false
 
     private var webView: AppWebView?
@@ -336,9 +338,16 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
         let source = frame.securityOrigin
         guard let origin, message.webView === webView,
               origin.acceptsBridge(
-                protocol: source.protocol, host: source.host, port: source.port, isMainFrame: frame.isMainFrame),
-              let command = BridgeCommand(body: message.body)
+                protocol: source.protocol, host: source.host, port: source.port, isMainFrame: frame.isMainFrame)
         else {
+            reply(nil, "refused")
+            return
+        }
+        if let recording = RecordingCommand(body: message.body) {
+            handleRecording(recording, reply: reply)
+            return
+        }
+        guard let command = BridgeCommand(body: message.body) else {
             reply(nil, "refused")
             return
         }
@@ -359,6 +368,46 @@ final class MainWindowController: NSObject, NSWindowDelegate, WKNavigationDelega
             onRevealData?()
             reply(["ok": true], nil)
         }
+    }
+
+    private func handleRecording(
+        _ command: RecordingCommand, reply: @escaping @MainActor @Sendable (Any?, String?) -> Void
+    ) {
+        guard let recorder else {
+            reply(nil, "unavailable")
+            return
+        }
+        switch command {
+        case .sources:
+            Task { reply(await recorder.sources(), nil) }
+        case .start(.failure(let error)):
+            reply(["ok": false, "error": error.rawValue], nil)
+        case .start(.success(let request)):
+            Task {
+                if let error = await recorder.start(request) {
+                    reply(["ok": false, "error": error.rawValue], nil)
+                } else {
+                    reply(["ok": true], nil)
+                }
+            }
+        case .stop:
+            // Finalizing and queueing go on after the reply; the status is pushed.
+            Task { await recorder.stop() }
+            reply(["ok": true], nil)
+        case .status:
+            reply(recorder.status.jsonObject, nil)
+        case .openSettings(let pane):
+            recorder.openSettings(pane)
+            reply(["ok": true], nil)
+        }
+    }
+
+    /// Pushes the recording status to the page (arguments go as data, not script text).
+    func pushRecording(_ status: RecordingStatus) {
+        guard let origin, let webView, let current = webView.url, origin.isLocal(current) else { return }
+        webView.callAsyncJavaScript(
+            PageScript.recordingStatus, arguments: ["status": status.jsonObject], in: nil, in: .page,
+            completionHandler: nil)
     }
 
     // MARK: - Navigation

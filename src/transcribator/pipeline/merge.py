@@ -10,10 +10,16 @@ from __future__ import annotations
 import re
 from bisect import bisect_left
 from collections.abc import Sequence
+from dataclasses import replace
 
 from transcribator.models import RawResult, Segment, SpeakerTurn, Transcript, Word
 
 DEFAULT_SPEAKER = "SPEAKER_00"
+# The speaker of a recording's own microphone channel (the person recording). A normal
+# label: it can be renamed like any other, only its default display name differs.
+MIC_SPEAKER = "ME"
+# A speaker of the other channel that happens to carry the same label gets this one.
+_MIC_CLASH = "ME_OTHER"
 
 # Characters that attach to the previous word in text without a space.
 _CLOSING = re.compile(r"^[.,!?;:…)\]»”]+$")
@@ -130,3 +136,17 @@ def merge_result(raw: RawResult, duration_s: float) -> Transcript:
     words = sorted(raw.words, key=lambda w: (w.start, w.end))
     speakers = assign_speakers(words, raw.turns)
     return Transcript(segments=build_segments(words, speakers), duration_s=duration_s)
+
+
+def merge_channels(
+    others: Sequence[Segment], mine: Sequence[Segment], duration_s: float
+) -> Transcript:
+    """Join the transcripts of two channels of one recording into one transcript.
+
+    `others` keeps its speakers (diarized), every segment of `mine` belongs to
+    `MIC_SPEAKER`. Both use the same timeline, so segments are only ordered by start
+    time; overlapping speech stays as it is (both utterances are kept)."""
+    joined = [replace(s, speaker=_MIC_CLASH) if s.speaker == MIC_SPEAKER else s for s in others]
+    joined += [replace(s, speaker=MIC_SPEAKER) for s in mine]
+    joined.sort(key=lambda s: (s.start, s.end))  # stable: ties keep the other channel first
+    return Transcript(segments=joined, duration_s=duration_s)

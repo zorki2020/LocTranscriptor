@@ -5,6 +5,8 @@
 - `transcribator.sqlite3`: the database (600);
 - `uploads/`: temporary copies of recordings dropped into the browser, kept until
   processing finishes;
+- `audio/`: recordings the user chose to keep (`rec<hex>.m4a`), deleted with the meeting;
+- `recordings/`: the app's working folders of recordings in progress;
 - `work/`: temporary job files with the recognition result;
 - in the app also `models/` (speech models) and `settings.json` (languages).
 """
@@ -24,6 +26,8 @@ _OWN_ENTRIES = frozenset(
         "transcribator.sqlite3-wal",
         "transcribator.sqlite3-shm",
         "uploads",
+        "audio",
+        "recordings",
         "work",
         "worker.lock",
         "serve.lock",
@@ -64,3 +68,7 @@ def uploads_dir(root: Path) -> Path:
 
 def work_dir(root: Path) -> Path:
     return ensure_private_dir(root / "work")
+
+
+def audio_dir(root: Path) -> Path:
+    return ensure_private_dir(root / "audio")

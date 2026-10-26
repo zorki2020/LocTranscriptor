@@ -1,8 +1,13 @@
 // transcribator-audio: checks a recording and converts it to mono 16 kHz 16-bit WAV with
 // AVFoundation, without ffmpeg.
 //
-//   transcribator-audio probe <file>          -> {"duration": <seconds>}
-//   transcribator-audio convert <file> <wav>  -> {"ok": true}
+//   transcribator-audio probe <file>                   -> {"duration": <seconds>}
+//   transcribator-audio convert <file> <wav>           -> {"ok": true}
+//   transcribator-audio split <file> <wav0> <wav1>     -> {"ok": true}
+//
+// `split` takes a two-channel recording and writes each channel as its own mono 16 kHz
+// 16-bit WAV file on the same timeline; anything but two channels is refused with
+// "not_two_channels". `convert` of a two-channel file still gives a mono mix.
 //
 // On failure: exit code 1 and {"error": "<code>"} on stdout, nothing else. The codes match
 // pipeline/audio.py. File names, paths and system error texts are never printed: they may
@@ -125,20 +130,19 @@ func probe(_ path: String) async throws -> Double {
     return seconds
 }
 
-/// Decodes the first audio track to 16 kHz mono 16-bit PCM and writes a WAV file.
-func convert(_ path: String, to output: String) async throws {
-    let asset = try openAsset(path)
-    let track = try await audioTrack(asset)
+/// Starts decoding the track to 16 kHz 16-bit interleaved PCM with `channels` channels.
+func startPCMReader(_ asset: AVURLAsset, _ track: AVAssetTrack, channels: Int,
+                    failure: String) throws -> (AVAssetReader, AVAssetReaderTrackOutput) {
     let reader: AVAssetReader
     do {
         reader = try AVAssetReader(asset: asset)
     } catch {
-        throw AudioFailure.code("normalize_failed")
+        throw AudioFailure.code(failure)
     }
     let settings: [String: Any] = [
         AVFormatIDKey: kAudioFormatLinearPCM,
         AVSampleRateKey: 16_000,
-        AVNumberOfChannelsKey: 1,
+        AVNumberOfChannelsKey: channels,
         AVLinearPCMBitDepthKey: 16,
         AVLinearPCMIsFloatKey: false,
         AVLinearPCMIsBigEndianKey: false,
@@ -146,35 +150,113 @@ func convert(_ path: String, to output: String) async throws {
     ]
     let out = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
     out.alwaysCopiesSampleData = false
-    guard reader.canAdd(out) else { throw AudioFailure.code("normalize_failed") }
+    guard reader.canAdd(out) else { throw AudioFailure.code(failure) }
     reader.add(out)
-    guard reader.startReading() else { throw AudioFailure.code("normalize_failed") }
+    guard reader.startReading() else { throw AudioFailure.code(failure) }
+    return (reader, out)
+}
 
-    guard FileManager.default.createFile(atPath: output, contents: nil,
+/// A new private output file with a 44-byte placeholder for the WAV header.
+func createWAV(_ path: String, failure: String) throws -> FileHandle {
+    guard FileManager.default.createFile(atPath: path, contents: nil,
                                          attributes: [.posixPermissions: 0o600]),
-          let file = FileHandle(forWritingAtPath: output)
-    else { throw AudioFailure.code("normalize_failed") }
-    defer { try? file.close() }
+          let file = FileHandle(forWritingAtPath: path)
+    else { throw AudioFailure.code(failure) }
     try file.write(contentsOf: Data(count: 44))  // header placeholder, filled in at the end
+    return file
+}
+
+/// The PCM bytes of one decoded buffer, or nil for a buffer without data.
+func pcmBytes(_ buffer: CMSampleBuffer, failure: String) throws -> Data? {
+    guard let block = CMSampleBufferGetDataBuffer(buffer) else { return nil }
+    let length = CMBlockBufferGetDataLength(block)
+    var chunk = Data(count: length)
+    guard length > 0 else { return chunk }
+    let status = chunk.withUnsafeMutableBytes { raw in
+        CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length,
+                                   destination: raw.baseAddress!)
+    }
+    guard status == kCMBlockBufferNoErr else { throw AudioFailure.code(failure) }
+    return chunk
+}
+
+func finishWAV(_ file: FileHandle, dataBytes: UInt64) throws {
+    try file.seek(toOffset: 0)
+    try file.write(contentsOf: wavHeader(dataBytes: UInt32(dataBytes)))
+}
+
+/// Decodes the first audio track to 16 kHz mono 16-bit PCM and writes a WAV file.
+func convert(_ path: String, to output: String) async throws {
+    let asset = try openAsset(path)
+    let track = try await audioTrack(asset)
+    let (reader, out) = try startPCMReader(asset, track, channels: 1, failure: "normalize_failed")
+    let file = try createWAV(output, failure: "normalize_failed")
+    defer { try? file.close() }
 
     var dataBytes: UInt64 = 0
     while let buffer = out.copyNextSampleBuffer() {
-        guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
-        let length = CMBlockBufferGetDataLength(block)
-        var chunk = Data(count: length)
-        let status = chunk.withUnsafeMutableBytes { raw in
-            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length,
-                                       destination: raw.baseAddress!)
-        }
-        guard status == kCMBlockBufferNoErr else { throw AudioFailure.code("normalize_failed") }
+        guard let chunk = try pcmBytes(buffer, failure: "normalize_failed") else { continue }
         try file.write(contentsOf: chunk)  // throws on a full disk instead of crashing
-        dataBytes += UInt64(length)
+        dataBytes += UInt64(chunk.count)
     }
     guard reader.status == .completed, dataBytes > 0, dataBytes < UInt64(UInt32.max) - 36 else {
         throw AudioFailure.code("normalize_failed")
     }
-    try file.seek(toOffset: 0)
-    try file.write(contentsOf: wavHeader(dataBytes: UInt32(dataBytes)))
+    try finishWAV(file, dataBytes: dataBytes)
+}
+
+/// Number of channels of the track's audio format, 0 if unknown.
+func channelCount(_ track: AVAssetTrack) async -> Int {
+    let formats = (try? await track.load(.formatDescriptions)) ?? []
+    for format in formats {
+        if let description = CMAudioFormatDescriptionGetStreamBasicDescription(format) {
+            return Int(description.pointee.mChannelsPerFrame)
+        }
+    }
+    return 0
+}
+
+/// Decodes a two-channel track to 16 kHz 16-bit PCM and writes each channel to its own
+/// mono WAV file: channel 0 to `output0`, channel 1 to `output1`.
+func split(_ path: String, to output0: String, _ output1: String) async throws {
+    let asset = try openAsset(path)
+    let track = try await audioTrack(asset)
+    guard await channelCount(track) == 2 else { throw AudioFailure.code("not_two_channels") }
+    let (reader, out) = try startPCMReader(asset, track, channels: 2, failure: "split_failed")
+    let file0 = try createWAV(output0, failure: "split_failed")
+    defer { try? file0.close() }
+    let file1 = try createWAV(output1, failure: "split_failed")
+    defer { try? file1.close() }
+
+    var dataBytes: UInt64 = 0  // per channel
+    while let buffer = out.copyNextSampleBuffer() {
+        guard let chunk = try pcmBytes(buffer, failure: "split_failed") else { continue }
+        // Interleaved frames of 4 bytes: 2 bytes of channel 0, then 2 bytes of channel 1.
+        guard chunk.count % 4 == 0 else { throw AudioFailure.code("split_failed") }
+        let frames = chunk.count / 4
+        var left = Data(count: frames * 2)
+        var right = Data(count: frames * 2)
+        chunk.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
+            left.withUnsafeMutableBytes { (l: UnsafeMutableRawBufferPointer) in
+                right.withUnsafeMutableBytes { (r: UnsafeMutableRawBufferPointer) in
+                    for i in 0..<frames {
+                        l[2 * i] = source[4 * i]
+                        l[2 * i + 1] = source[4 * i + 1]
+                        r[2 * i] = source[4 * i + 2]
+                        r[2 * i + 1] = source[4 * i + 3]
+                    }
+                }
+            }
+        }
+        try file0.write(contentsOf: left)  // throws on a full disk instead of crashing
+        try file1.write(contentsOf: right)
+        dataBytes += UInt64(frames * 2)
+    }
+    guard reader.status == .completed, dataBytes > 0, dataBytes < UInt64(UInt32.max) - 36 else {
+        throw AudioFailure.code("split_failed")
+    }
+    try finishWAV(file0, dataBytes: dataBytes)
+    try finishWAV(file1, dataBytes: dataBytes)
 }
 
 func wavHeader(dataBytes: UInt32, rate: UInt32 = 16_000, channels: UInt16 = 1,
@@ -207,8 +289,20 @@ func run() async -> Int32 {
                 throw error
             }
             emit(["ok": true])
+        case (5, "split"):
+            guard args[3] != args[4] else { throw AudioFailure.code("split_failed") }
+            do {
+                try await split(args[2], to: args[3], args[4])
+            } catch {
+                // Half-written channel files hold part of the meeting: never leave them.
+                for output in [args[3], args[4]] {
+                    try? FileManager.default.removeItem(atPath: output)
+                }
+                throw (error as? AudioFailure) ?? AudioFailure.code("split_failed")
+            }
+            emit(["ok": true])
         default:
-            FileHandle.standardError.write(Data("usage: transcribator-audio probe <file> | convert <file> <wav>\n".utf8))
+            FileHandle.standardError.write(Data("usage: transcribator-audio probe <file> | convert <file> <wav> | split <file> <wav0> <wav1>\n".utf8))
             return 2
         }
         return 0

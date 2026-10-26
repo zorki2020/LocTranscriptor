@@ -46,6 +46,10 @@ _ERRORS = {
     "audio_tool_missing": "err_prepare_failed",
     "normalize_failed": "err_prepare_failed",
     "cut_failed": "err_prepare_failed",
+    "split_failed": "err_prepare_failed",
+    "not_two_channels": "err_prepare_failed",
+    "bad_layout": "err_prepare_failed",
+    "peak_failed": "err_prepare_failed",
     "bad_result": "err_bad_result",
 }
 SPEAKER_COLORS = 8

@@ -38,9 +38,16 @@ from urllib.parse import parse_qs, quote, unquote
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -53,11 +60,12 @@ from transcribator.i18n import (
     ui_lang,
 )
 from transcribator.modelstore import ModelStore
-from transcribator.paths import uploads_dir
+from transcribator.paths import audio_dir, uploads_dir
 from transcribator.pipeline.audio import AudioError, probe_duration
 from transcribator.pipeline.format_md import render_markdown, speaker_labels
+from transcribator.pipeline.merge import MIC_SPEAKER
 from transcribator.storage import db, repo
-from transcribator.web import display, queries
+from transcribator.web import display, queries, recordings
 from transcribator.web.picker import pick_file
 from transcribator.web.security import FORM_CONTENT_TYPE, FORM_LIMIT_BYTES, LocalOnlyMiddleware
 from transcribator.web.strings import language_name, plural, t
@@ -65,7 +73,7 @@ from transcribator.web.strings import language_name, plural, t
 MAX_UPLOAD_BYTES = 8 * 1024**3
 DISK_HEADROOM_BYTES = 1024**3
 _WRITE_BATCH = 1024**2
-UPLOAD_REF = re.compile(r"[0-9a-f]{32}")
+UPLOAD_REF = recordings.UPLOAD_REF
 _MAX_ID = 2**63 - 1
 SEARCH_LIMIT = 50
 # Where the app writes its log (AppPaths.logDirectory in the Swift app), for Settings.
@@ -89,12 +97,60 @@ def home_relative(path: Path) -> str:
 # Paths in one /enqueue request (the form itself is capped at 64 KB and 50 fields).
 ENQUEUE_LIMIT = 40
 # Characters that can't be in a download file name on macOS or confuse other systems.
+_AUDIO_CHUNK = 256 * 1024
 _FILENAME_BAD = re.compile(r'[\x00-\x1f\x7f/\\:*?"<>|]+')
 _FINAL = frozenset({"done", "error"})
 
 
 class _UploadTooLarge(Exception):
     pass
+
+
+class _FdCloser:
+    """Closes a descriptor once, whoever gets there first (the stream or the response)."""
+
+    def __init__(self, fd: int) -> None:
+        self.fd: int | None = fd
+
+    def close(self) -> None:
+        fd, self.fd = self.fd, None
+        if fd is not None:
+            os.close(fd)
+
+
+def _read_fd(closer: _FdCloser, size: int) -> Iterator[bytes]:
+    """The first `size` bytes of the descriptor, in chunks. The descriptor is closed at
+    the end, on an error and when the client leaves."""
+    try:
+        left = size
+        while left > 0 and closer.fd is not None:
+            chunk = os.read(closer.fd, min(_AUDIO_CHUNK, left))
+            if not chunk:
+                break
+            left -= len(chunk)
+            yield chunk
+    finally:
+        closer.close()
+
+
+def _recording_error(code: str, status: int) -> JSONResponse:
+    return JSONResponse({"error": code}, status, headers={"Cache-Control": "no-store"})
+
+
+async def _read_json_body(request: Request) -> bytes:
+    """A small JSON body, read with a hard cap (the `Content-Length` is not trusted)."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise recordings.RecordingError("bad_body")
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > recordings.MAX_BODY_BYTES:
+        raise recordings.RecordingError("bad_body", 413)
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > recordings.MAX_BODY_BYTES:
+            raise recordings.RecordingError("bad_body", 413)
+    return bytes(body)
 
 
 def _is_htmx(request: Request) -> bool:
@@ -146,12 +202,12 @@ def _name_taken(meeting: repo.Meeting, label: str, name: str) -> bool:
     return False
 
 
-def download_name(title: str, meeting_id: int) -> str:
-    """File name for a Markdown export in the app: the meeting title, cleaned up."""
+def download_name(title: str, meeting_id: int, extension: str = ".md") -> str:
+    """File name for a download in the app: the meeting title, cleaned up."""
     # Format characters (bidi overrides and the like) could disguise the name in Finder.
     visible = "".join(ch for ch in title if unicodedata.category(ch) != "Cf")
     name = " ".join(_FILENAME_BAD.sub(" ", visible).split()).strip(" .")[:120]
-    return f"{name or f'meeting-{meeting_id}'}.md"
+    return f"{name or f'meeting-{meeting_id}'}{extension}"
 
 
 def _content_disposition(name: str, fallback: str) -> str:
@@ -236,6 +292,10 @@ def create_app(
         if _is_htmx(request):
             return Response(status_code=200, headers={"HX-Redirect": url})
         return RedirectResponse(url, status_code=303)
+
+    def audio_root() -> Path:
+        """The folder of kept audio. Not created here: reading must not make folders."""
+        return data_root / "audio"
 
     def check_id(meeting_id: int) -> None:
         if meeting_id > _MAX_ID:
@@ -573,6 +633,60 @@ def create_app(
             data.update(models_ready=models.ready(), ui_lang=ui_lang())
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/csrf")
+    def api_csrf() -> JSONResponse:
+        """The CSRF token for the native app: its recording client sends the token back
+        in `X-CSRF-Token` (the key cookie is checked for this request too)."""
+        require_app_mode()
+        return JSONResponse({"csrf": csrf_token}, headers={"Cache-Control": "no-store"})
+
+    def save_recording(
+        req: recordings.RecordingRequest, folder: Path, audio_folder: Path | None
+    ) -> int:
+        """Queue the file once. A repeated request (the app retries after a lost answer)
+        gets the same meeting. If the meeting is already processed, the file the app
+        finalized again is surplus and is removed; a failed meeting keeps its file, it is
+        the source of "Retry"."""
+        with open_db() as conn:
+            existing = repo.upload_meeting(conn, req.ref)
+            if existing is not None:
+                meeting_id, status = existing
+                if status == "done":
+                    # unlink removes a link itself, never what it points to.
+                    (folder / req.ref).unlink(missing_ok=True)
+                return meeting_id
+            recordings.check_file(folder, req.ref)
+            if req.audio_ref is not None and audio_folder is not None:
+                recordings.check_audio(audio_folder, req.audio_ref)
+            title = recordings.clean_title(req.title) or recordings.default_title(req.started_at)
+            return repo.enqueue_upload_once(
+                conn,
+                title=title,
+                recorded_at=recordings.recorded_at(req.started_at),
+                source_ref=req.ref,
+                language=req.language,
+                layout=req.layout,
+                audio_ref=req.audio_ref,
+            )
+
+    @app.post("/api/recordings")
+    async def api_recordings(request: Request) -> JSONResponse:
+        """App mode: queue a recording the app has just finalized in `uploads`. The body
+        is small JSON; errors are `{"error": code}` and never echo the input."""
+        if not app_mode:
+            return _recording_error("not_app_mode", 404)
+        try:
+            raw = await _read_json_body(request)
+            req = recordings.parse_body(raw)
+            folder = await run_in_threadpool(uploads_dir, data_root)
+            audio_folder = (
+                None if req.audio_ref is None else await run_in_threadpool(audio_dir, data_root)
+            )
+            meeting_id = await run_in_threadpool(save_recording, req, folder, audio_folder)
+        except recordings.RecordingError as exc:
+            return _recording_error(exc.code, exc.status)
+        return JSONResponse({"meeting_id": meeting_id}, headers={"Cache-Control": "no-store"})
+
     @app.get("/meetings/{meeting_id:int}.md")
     def export_md(meeting_id: int) -> Response:
         check_id(meeting_id)
@@ -600,6 +714,44 @@ def create_app(
             text,
             media_type="text/markdown; charset=utf-8",
             headers={"Content-Disposition": disposition},
+        )
+
+    @app.get("/meetings/{meeting_id:int}/audio")
+    def meeting_audio(meeting_id: int) -> Response:
+        """The kept audio of a recording. The path comes only from the reference stored
+        for this meeting, re-checked here; nothing in the request names a file."""
+        check_id(meeting_id)
+        with open_db() as conn:
+            meeting = repo.get_meeting(conn, meeting_id)
+        opened = (
+            None
+            if meeting is None
+            else recordings.open_meeting_audio(audio_root(), meeting.audio_ref)
+        )
+        if meeting is None or opened is None:
+            raise StarletteHTTPException(404)
+        fd, size = opened
+        fallback = f"meeting-{meeting_id}.m4a"
+        # Same rule as the Markdown export: a browser keeps downloads in its history, so
+        # there the name carries the id only.
+        disposition = (
+            _content_disposition(download_name(meeting.title, meeting_id, ".m4a"), fallback)
+            if app_mode
+            else f'attachment; filename="{fallback}"'
+        )
+        # The verified descriptor is what gets served, not the path again: the file cannot
+        # be swapped for a link in between.
+        closer = _FdCloser(fd)
+        return StreamingResponse(
+            _read_fd(closer, size),
+            media_type="audio/mp4",
+            headers={
+                "Content-Disposition": disposition,
+                "Content-Length": str(size),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+            background=BackgroundTask(closer.close),
         )
 
     @app.get("/meetings/{meeting_id:int}/status", response_class=HTMLResponse)
@@ -637,8 +789,14 @@ def create_app(
                 speakers.append(
                     {"label": label, "shown": label, "name": meeting.names.get(label, "")}
                 )
-        for index, speaker in enumerate(speakers, start=1):
-            speaker["index"] = str(index)
+        number = 0
+        for speaker in speakers:
+            # The microphone speaker is "Me" and does not take a number.
+            if speaker["label"] == MIC_SPEAKER:
+                speaker["index"] = ""
+            else:
+                number += 1
+                speaker["index"] = str(number)
             speaker["spk"] = classes.get(speaker["label"], "")
         segments = [
             {
@@ -660,6 +818,7 @@ def create_app(
             segments=segments,
             language=language,
             long=(meeting.duration_s or 0) >= 3600,
+            has_audio=recordings.has_audio(audio_root(), meeting.audio_ref),
             nav="list",
         )
 
@@ -728,15 +887,17 @@ def create_app(
         check_id(meeting_id)
         with open_db() as conn:
             try:
-                source = repo.delete_meeting(conn, meeting_id)
+                removed = repo.remove_meeting(conn, meeting_id)
             except repo.MeetingBusy:
                 return message(request, 409, t("meeting_busy"))
-        if source is None:
+        if removed is None:
             raise StarletteHTTPException(404)
-        kind, ref = source
-        # The path is built only from a reference of a strict shape: 32 hex characters.
+        kind, ref = removed.source_kind, removed.source_ref
+        # The path is built only from a reference of a strict shape: 32 hex characters
+        # (a browser upload) or `rec` + 24 (a recording made in the app).
         if kind == repo.SOURCE_UPLOAD and UPLOAD_REF.fullmatch(ref):
             (uploads_dir(data_root) / ref).unlink(missing_ok=True)
+        recordings.remove_audio(audio_root(), removed.audio_ref)
         return done(request, "/meetings")
 
     return app

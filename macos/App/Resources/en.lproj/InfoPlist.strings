@@ -7,3 +7,5 @@
 "NSDownloadsFolderUsageDescription" = "LocTranscriptor reads the meeting recordings you choose or drop into its window, and saves exported transcripts where you ask. Everything stays on this Mac.";
 "NSRemovableVolumesUsageDescription" = "LocTranscriptor reads meeting recordings from external drives when you choose them. They stay on this Mac.";
 "NSNetworkVolumesUsageDescription" = "LocTranscriptor reads meeting recordings from network drives when you choose them. Nothing is sent anywhere.";
+"NSMicrophoneUsageDescription" = "LocTranscriptor records your microphone when you turn it on for a meeting recording. The recording stays on this Mac.";
+"NSAudioCaptureUsageDescription" = "LocTranscriptor records the sound of your Mac, for example a call in another app, when you start a recording. The recording stays on this Mac.";

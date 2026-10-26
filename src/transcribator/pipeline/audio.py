@@ -1,7 +1,8 @@
 """Audio handling via ffmpeg and ffprobe, or via the app's AVFoundation helper.
 
 Two tools with the same contract (duration with an audio track check, conversion to mono
-16 kHz 16-bit WAV, the same error codes):
+16 kHz 16-bit WAV, splitting a two-channel recording into two such files, the same error
+codes):
 - ffmpeg and ffprobe from PATH (installation from source);
 - `transcribator-audio` (Swift, AVFoundation, shipped inside LocTranscriptor.app) when
   `TRANSCRIBATOR_AUDIO_TOOL` points to it. It identifies the container by the file's
@@ -17,11 +18,14 @@ exception is not chained (`from None`), otherwise it would end up in the traceba
 
 from __future__ import annotations
 
+import contextlib
 import json
+import math
 import os
 import subprocess
 import sys
 import wave
+from array import array
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +103,14 @@ def _run_tool(
         data = {}
     if proc.returncode != 0:
         code = data.get("error")
-        known = {"probe_failed", "no_audio_stream", "empty_audio", "normalize_failed"}
+        known = {
+            "probe_failed",
+            "no_audio_stream",
+            "empty_audio",
+            "normalize_failed",
+            "split_failed",
+            "not_two_channels",
+        }
         raise AudioError(code if code in known else fallback)
     return data
 
@@ -185,6 +196,111 @@ def normalize_to_wav(src: Path, dst: Path) -> None:
     ]
     if _run(cmd, CONVERT_TIMEOUT_S).returncode != 0:
         raise AudioError("normalize_failed")
+
+
+def split_channels(src: Path, out_ch0: Path, out_ch1: Path) -> None:
+    """A two-channel recording -> two mono 16 kHz 16-bit WAV files, one per channel, on the
+    same timeline as the source. Anything but exactly two channels is refused with
+    `not_two_channels`. Both outputs must be in one directory (the helper's sandbox may
+    write only there). A partial output never stays behind on failure."""
+    try:
+        if out_ch0.parent != out_ch1.parent or out_ch0 == out_ch1:
+            raise AudioError("split_failed")
+        tool = _audio_tool()
+        if tool is not None:
+            args = ["split", str(src.resolve()), str(out_ch0), str(out_ch1)]
+            _run_tool(tool, args, CONVERT_TIMEOUT_S, "split_failed", writable=out_ch0.parent)
+            return
+        _split_ffmpeg(src, out_ch0, out_ch1)
+    except BaseException:
+        for path in (out_ch0, out_ch1):
+            with contextlib.suppress(OSError):
+                path.unlink()
+        raise
+
+
+def _channel_count(src: Path) -> int:
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        *_LOCAL_ONLY,
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=channels",
+        "-of",
+        "json",
+        str(src.resolve()),
+    ]
+    proc = _run(cmd, PROBE_TIMEOUT_S)
+    if proc.returncode != 0:
+        raise AudioError("probe_failed")
+    try:
+        streams = json.loads(proc.stdout).get("streams", [])
+    except (ValueError, AttributeError):
+        raise AudioError("probe_bad_output") from None
+    if not streams:
+        raise AudioError("no_audio_stream")
+    try:
+        return int(streams[0]["channels"])
+    except (KeyError, TypeError, ValueError):
+        raise AudioError("probe_bad_output") from None
+
+
+def _split_ffmpeg(src: Path, out_ch0: Path, out_ch1: Path) -> None:
+    if _channel_count(src) != 2:
+        raise AudioError("not_two_channels")
+    graph = "[0:a:0]asplit=2[a][b];[a]pan=mono|c0=c0[c0];[b]pan=mono|c0=c1[c1]"
+    pcm = ["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le"]
+    cmd = [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-v",
+        "error",
+        *_LOCAL_ONLY,
+        "-i",
+        str(src.resolve()),
+        "-filter_complex",
+        graph,
+        "-map",
+        "[c0]",
+        *pcm,
+        str(out_ch0),
+        "-map",
+        "[c1]",
+        *pcm,
+        str(out_ch1),
+    ]
+    if _run(cmd, CONVERT_TIMEOUT_S).returncode != 0:
+        raise AudioError("split_failed")
+
+
+def count_loud_blocks(path: Path, block_s: float, rms_threshold: float) -> tuple[int, int]:
+    """(blocks whose RMS exceeds `rms_threshold`, all blocks) of a mono 16-bit PCM WAV cut
+    into blocks of `block_s` seconds (the last one may be shorter). The file is streamed
+    block by block, without subprocesses. `rms_threshold` is in 16-bit sample units."""
+    loud = total = 0
+    limit = rms_threshold * rms_threshold
+    try:
+        with wave.open(str(path), "rb") as reader:
+            if reader.getsampwidth() != 2 or reader.getnchannels() != 1:
+                raise AudioError("level_failed")
+            block = max(int(reader.getframerate() * block_s), 1)
+            while frames := reader.readframes(block):
+                samples = array("h")
+                samples.frombytes(frames[: len(frames) - len(frames) % 2])
+                if not samples:
+                    break
+                if sys.byteorder != "little":
+                    samples.byteswap()
+                total += 1
+                if math.sumprod(samples, samples) / len(samples) > limit:
+                    loud += 1
+    except (wave.Error, OSError, EOFError):
+        raise AudioError("level_failed") from None
+    return loud, total
 
 
 def cut_wav(src: Path, dst: Path, start_s: float, duration_s: float) -> None:

@@ -5,8 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterable
 
-from transcribator.i18n import pick
-from transcribator.pipeline.format_md import LABELS
+from transcribator.pipeline.format_md import default_speaker_names
 from transcribator.storage import repo
 
 
@@ -21,11 +20,9 @@ def speaker_display_names(
         (meeting_id,),
     ).fetchall()
     names = repo.speaker_names(conn, meeting_id)
-    return {
-        str(row["speaker_label"]): names.get(str(row["speaker_label"]))
-        or pick(LABELS, "speaker_n", lang, n=index)
-        for index, row in enumerate(rows, start=1)
-    }
+    labels = [str(row["speaker_label"]) for row in rows]
+    defaults = default_speaker_names(labels, lang=lang)
+    return {label: names.get(label) or defaults[label] for label in labels}
 
 
 def job_stage(conn: sqlite3.Connection, meeting_id: int) -> str | None:

@@ -84,6 +84,18 @@ _MIGRATIONS: list[str] = [
     """
     ALTER TABLE job ADD COLUMN child_pgid INTEGER;
     """,
+    # 3: channel layout of the recording. 'mono' is a single mixed channel (every file
+    # added before recording existed); 'mic_system' is channel 0 = microphone, channel 1 =
+    # system audio.
+    """
+    ALTER TABLE meeting ADD COLUMN layout TEXT NOT NULL DEFAULT 'mono'
+        CHECK (layout IN ('mono', 'mic_system'));
+    """,
+    # 4: the name of the kept audio file of a recording (`audio/rec<hex>.m4a`), if the user
+    # chose to keep it. NULL for every meeting without saved audio.
+    """
+    ALTER TABLE meeting ADD COLUMN audio_ref TEXT;
+    """,
 ]
 SCHEMA_VERSION = len(_MIGRATIONS)
 

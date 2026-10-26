@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from time import perf_counter
 
-from transcribator.models import RawResult
+from transcribator.models import RawResult, SpeakerTurn
 from transcribator.pipeline.audio import normalize_to_wav
 from transcribator.pipeline.interfaces import Diarizer, Transcriber
 from transcribator.pipeline.tempfiles import job_prefix
@@ -25,12 +25,17 @@ class LocalEngine:
     def __init__(
         self,
         transcriber: Transcriber,
-        diarizer: Diarizer,
+        diarizer: Diarizer | None,
         tmp_root: Path | None = None,
     ) -> None:
         self._transcriber = transcriber
         self._diarizer = diarizer
         self._tmp_root = tmp_root
+
+    def without_diarization(self) -> LocalEngine:
+        """The same recognition without diarization: for a channel with one known speaker
+        (the microphone of a two-channel recording). No speaker turns are returned."""
+        return LocalEngine(self._transcriber, None, self._tmp_root)
 
     def analyze(self, audio_path: Path) -> RawResult:
         timings: dict[str, float] = {}
@@ -41,9 +46,11 @@ class LocalEngine:
             normalize_to_wav(audio_path, wav)
             timings["normalize"] = perf_counter() - started
 
-            started = perf_counter()
-            turns = self._diarizer.diarize(wav)
-            timings["diarize"] = perf_counter() - started
+            turns: list[SpeakerTurn] = []
+            if self._diarizer is not None:
+                started = perf_counter()
+                turns = self._diarizer.diarize(wav)
+                timings["diarize"] = perf_counter() - started
 
             started = perf_counter()
             words = self._transcriber.transcribe(wav, turns)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -22,12 +23,19 @@ class FakeProcessor:
         self.result = result
         self.calls: list[tuple[Path, Path]] = []
         self.languages: list[str] = []
+        self.layouts: list[str] = []
 
     def __call__(
-        self, src: Path, work: Path, on_start: object = None, language: str = "en"
+        self,
+        src: Path,
+        work: Path,
+        on_start: object = None,
+        language: str = "en",
+        layout: str = "mono",
     ) -> Transcript:
         self.calls.append((src, work))
         self.languages.append(language)
+        self.layouts.append(layout)
         if callable(on_start):
             on_start(4242)  # like run_isolated: the child's PGID
         (work / "transcript.json").write_text("{}", encoding="utf-8")  # like the real child
@@ -127,6 +135,53 @@ def test_upload_copy_deleted_after_success_kept_after_error(root: Path) -> None:
     _meeting(root, Path(bad.name), kind="upload")
     bad_worker.run_once()
     assert bad.exists()  # kept for "Retry"
+
+
+def test_recover_removes_only_old_unreferenced_kept_audio(root: Path, tmp_path: Path) -> None:
+    worker = _worker(root, processor=FakeProcessor())
+    folder = root / "audio"
+    folder.mkdir(mode=0o700)
+    old_orphan = folder / ("rec" + "a" * 24 + ".m4a")
+    young_orphan = folder / ("rec" + "b" * 24 + ".m4a")
+    referenced = folder / ("rec" + "c" * 24 + ".m4a")
+    odd_names = [folder / "notes.m4a", folder / ("rec" + "F" * 24 + ".m4a"), folder / "x.txt"]
+    for path in (old_orphan, young_orphan, referenced, *odd_names):
+        path.write_bytes(b"x")
+    outside = tmp_path / "outside-target"
+    outside.write_bytes(b"x")
+    old_link = folder / ("rec" + "d" * 24 + ".m4a")
+    os.symlink(outside, old_link)
+    old_dir = folder / ("rec" + "e" * 24 + ".m4a")
+    old_dir.mkdir()
+    long_ago = time.time() - 8 * 86400
+    for path in (old_orphan, referenced, *odd_names):
+        os.utime(path, (long_ago, long_ago))
+    os.utime(old_link, (long_ago, long_ago), follow_symlinks=False)
+    os.utime(old_dir, (long_ago, long_ago))
+    conn = db.connect(db_path(root))
+    repo.enqueue_upload_once(
+        conn,
+        title="a",
+        recorded_at=None,
+        source_ref="rec" + "c" * 24 + ".wav",
+        language="ru",
+        layout="mono",
+        audio_ref=referenced.name,
+    )
+    conn.close()
+
+    worker.recover()
+
+    assert not old_orphan.exists()
+    assert young_orphan.exists() and referenced.exists()
+    assert all(path.exists() for path in odd_names)
+    assert not old_link.is_symlink() and outside.exists()  # the link goes, not its target
+    assert old_dir.is_dir()
+
+
+def test_recover_without_audio_folder_is_fine(root: Path) -> None:
+    _worker(root, processor=FakeProcessor()).recover()
+    assert not (root / "audio").exists()
 
 
 def test_recover_requeues_and_removes_orphans(root: Path, tmp_path: Path) -> None:
@@ -287,9 +342,14 @@ def test_child_pgid_is_recorded_during_and_cleared_after_job(root: Path, tmp_pat
 
     class Recording(FakeProcessor):
         def __call__(
-            self, src: Path, work: Path, on_start: object = None, language: str = "en"
+            self,
+            src: Path,
+            work: Path,
+            on_start: object = None,
+            language: str = "en",
+            layout: str = "mono",
         ) -> Transcript:
-            result = super().__call__(src, work, on_start, language)
+            result = super().__call__(src, work, on_start, language, layout)
             conn = db.connect(db_path(root))
             seen.append(repo.interrupted_children(conn))
             conn.close()

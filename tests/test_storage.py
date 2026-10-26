@@ -160,13 +160,13 @@ def test_rename_update_and_delete_cascade(conn: sqlite3.Connection) -> None:
     meeting = repo.get_meeting(conn, meeting_id)
     assert meeting is not None and meeting.title == "Синк по релизу"
 
-    assert repo.delete_meeting(conn, meeting_id) == ("upload", "abc")
+    assert repo.remove_meeting(conn, meeting_id) == repo.RemovedMeeting("upload", "abc", None)
 
     assert repo.get_meeting(conn, meeting_id) is None
     for table in ("segment", "speaker", "job"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0  # noqa: S608
     assert repo.search(conn, "миграция") == []
-    assert repo.delete_meeting(conn, meeting_id) is None
+    assert repo.remove_meeting(conn, meeting_id) is None
 
 
 def test_list_orders_by_recording_date_and_queue_puts_active_first(
@@ -201,7 +201,7 @@ def test_delete_refuses_meeting_in_processing(conn: sqlite3.Connection) -> None:
     meeting_id = _add(conn)
     assert repo.claim_next(conn) is not None
     with pytest.raises(repo.MeetingBusy):
-        repo.delete_meeting(conn, meeting_id)
+        repo.remove_meeting(conn, meeting_id)
     assert repo.get_meeting(conn, meeting_id) is not None
 
 

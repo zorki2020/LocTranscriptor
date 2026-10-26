@@ -7,3 +7,5 @@
 "NSDownloadsFolderUsageDescription" = "LocTranscriptor читает записи встреч, которые вы выбрали или перетащили в окно программы, и сохраняет транскрипты туда, куда вы укажете. Всё остаётся на этом Mac.";
 "NSRemovableVolumesUsageDescription" = "LocTranscriptor читает записи встреч с внешних дисков, когда вы их выбираете. Записи остаются на этом Mac.";
 "NSNetworkVolumesUsageDescription" = "LocTranscriptor читает записи встреч с сетевых дисков, когда вы их выбираете. Ничего никуда не отправляется.";
+"NSMicrophoneUsageDescription" = "LocTranscriptor записывает ваш микрофон, когда вы включаете его для записи встречи. Запись остаётся на этом Mac.";
+"NSAudioCaptureUsageDescription" = "LocTranscriptor записывает звук вашего Mac, например созвон в другой программе, когда вы начинаете запись. Запись остаётся на этом Mac.";

@@ -71,6 +71,155 @@ STRINGS: Table = {
     "open": {"en": "Open", "ru": "Открыть"},
     "error_code": {"en": "Code: {code}", "ru": "Код: {code}"},
     "running_for": {"en": "{time} so far", "ru": "уже {time}"},
+    # --- recording block (app only; app.js gets them from the hidden list in index.html)
+    "rec_title": {"en": "Record a meeting", "ru": "Запись встречи"},
+    "rec_hint": {
+        "en": "Records the sound playing on this Mac and, if you like, your microphone."
+        " When you stop, the recording goes to the queue.",
+        "ru": "Записывает звук, который играет на этом Mac, и при желании ваш микрофон."
+        " После остановки запись попадёт в очередь.",
+    },
+    "rec_source_label": {"en": "Source", "ru": "Источник"},
+    "rec_source_all": {"en": "All system audio", "ru": "Весь системный звук"},
+    "rec_mic_label": {"en": "Microphone", "ru": "Микрофон"},
+    "rec_mic_hint": {
+        "en": "Your voice goes on a separate channel and shows as “Me” in the transcript.",
+        "ru": "Ваш голос пишется на отдельную дорожку и в транскрипте подписан «Я».",
+    },
+    "rec_mic_none": {"en": "No microphone found", "ru": "Микрофон не найден"},
+    "rec_mic_device": {"en": "Device", "ru": "Устройство"},
+    "rec_keep_label": {
+        "en": "Save recording after processing",
+        "ru": "Сохранить запись после обработки",
+    },
+    "rec_keep_hint": {
+        "en": "The audio stays on this Mac next to the transcript, takes up space and is deleted"
+        " with the meeting.",
+        "ru": "Звук останется на этом Mac рядом с транскриптом, займёт место и удалится вместе"
+        " со встречей.",
+    },
+    "rec_audio_not_saved": {
+        "en": "The audio couldn't be saved, but the transcript is being made.",
+        "ru": "Звук сохранить не удалось, но транскрипт уже готовится.",
+    },
+    "audio_download": {"en": "Download audio", "ru": "Скачать звук"},
+    "rec_start": {"en": "Start recording", "ru": "Начать запись"},
+    "rec_stop": {"en": "Stop", "ru": "Остановить"},
+    "rec_state_starting": {"en": "Starting…", "ru": "Запуск…"},
+    "rec_state_recording": {"en": "Recording", "ru": "Идёт запись"},
+    "rec_state_stopping": {"en": "Saving the recording…", "ru": "Запись сохраняется…"},
+    "rec_starting_hint": {
+        "en": "macOS may ask for permission to record. Allow it to continue.",
+        "ru": "macOS может запросить разрешение на запись. Разрешите, чтобы продолжить.",
+    },
+    "rec_with_mic": {"en": "with microphone", "ru": "с микрофоном"},
+    "rec_level_mic": {"en": "Microphone", "ru": "Микрофон"},
+    "rec_level_system": {"en": "System audio", "ru": "Звук системы"},
+    "rec_queued": {
+        "en": "Recording saved and added to the queue.",
+        "ru": "Запись сохранена и добавлена в очередь.",
+    },
+    "rec_cancel": {"en": "Cancel", "ru": "Отменить"},
+    "rec_starting_app_hint": {
+        "en": "The recording begins when the app starts playing sound. macOS may ask for"
+        " permission to record. Allow it to continue.",
+        "ru": "Запись начнётся, когда приложение начнёт воспроизводить звук. macOS может"
+        " запросить разрешение на запись. Разрешите, чтобы продолжить.",
+    },
+    "rec_ended_early": {
+        "en": "Saved and added to the queue, but the recording ended early: {reason}",
+        "ru": "Запись сохранена и добавлена в очередь, но закончилась раньше времени: {reason}",
+    },
+    "rec_early_source_gone": {
+        "en": "the app you chose quit.",
+        "ru": "выбранное приложение закрылось.",
+    },
+    "rec_early_mic_denied": {
+        "en": "the microphone became unavailable.",
+        "ru": "микрофон стал недоступен.",
+    },
+    "rec_early_disk_low": {
+        "en": "the disk was running out of space.",
+        "ru": "на диске заканчивалось место.",
+    },
+    "rec_early_max_duration": {
+        "en": "it reached the 12 hour limit.",
+        "ru": "она дошла до предела в 12 часов.",
+    },
+    "rec_early_unknown": {
+        "en": "the recording stopped with an error.",
+        "ru": "запись остановилась с ошибкой.",
+    },
+    "rec_open_meeting": {"en": "Open meeting", "ru": "Открыть встречу"},
+    "rec_open_settings": {"en": "Open System Settings", "ru": "Открыть системные настройки"},
+    "rec_err_already_recording": {
+        "en": "A recording is already in progress.",
+        "ru": "Запись уже идёт.",
+    },
+    "rec_err_mic_denied": {
+        "en": "No microphone access. Allow it in System Settings or record without the microphone.",
+        "ru": "Нет доступа к микрофону. Разрешите его в системных настройках или запишите без"
+        " микрофона.",
+    },
+    "rec_err_no_source": {
+        "en": "No audio source to record. Pick another one.",
+        "ru": "Нет источника звука для записи. Выберите другой.",
+    },
+    "rec_err_source_gone": {
+        "en": "The chosen app didn't play any sound, so there was nothing to record.",
+        "ru": "Выбранное приложение не издало ни звука, поэтому записывать было нечего.",
+    },
+    "rec_err_start_failed": {
+        "en": "Couldn't start the recording. Try again.",
+        "ru": "Не удалось начать запись. Попробуйте ещё раз.",
+    },
+    "rec_err_disk_low": {
+        "en": "Not enough disk space to record. Free up space and try again.",
+        "ru": "Не хватает места на диске для записи. Освободите место и повторите.",
+    },
+    "rec_err_finalize_failed": {
+        "en": "Couldn't finish the recording file. The audio is kept and will be restored when the"
+        " app starts again.",
+        "ru": "Не удалось завершить файл записи. Звук сохранён, и запись восстановится при"
+        " следующем запуске программы.",
+    },
+    "rec_err_enqueue_failed": {
+        "en": "The recording is saved but couldn't be added to the queue. It will be added when"
+        " the app starts again.",
+        "ru": "Запись сохранена, но не попала в очередь. Она добавится при следующем запуске"
+        " программы.",
+    },
+    "rec_err_max_duration": {
+        "en": "The recording reached the 12 hour limit and was stopped. What was recorded is"
+        " saved.",
+        "ru": "Запись дошла до предела в 12 часов и остановилась. Записанное сохранено.",
+    },
+    "rec_err_unknown": {
+        "en": "The recording stopped with an error. Try again.",
+        "ru": "Запись остановилась с ошибкой. Попробуйте ещё раз.",
+    },
+    "rec_err_bridge": {
+        "en": "Couldn't reach the app. Try again.",
+        "ru": "Не удалось связаться с программой. Попробуйте ещё раз.",
+    },
+    "rec_warn_silent_system": {
+        "en": "No sound from apps yet. If something is playing, allow System Audio Recording in"
+        " System Settings.",
+        "ru": "Звук приложений пока не слышен. Если что-то играет, разрешите запись системного"
+        " звука в настройках.",
+    },
+    "rec_warn_silent_mic": {
+        "en": "No sound from the microphone. Check that it isn't muted.",
+        "ru": "С микрофона нет звука. Проверьте, что он не выключен.",
+    },
+    "rec_warn_device_changed": {
+        "en": "The sound output changed. Recording continues.",
+        "ru": "Устройство вывода звука сменилось. Запись продолжается.",
+    },
+    "rec_warn_disk_low": {
+        "en": "Disk space is low, so the recording stopped. What was recorded is saved.",
+        "ru": "Место на диске заканчивается, поэтому запись остановилась. Записанное сохранено.",
+    },
     # --- app.js messages
     "js_too_large": {
         "en": "This file is over 8 GB. Add it with the Choose file button instead.",
@@ -105,6 +254,13 @@ STRINGS: Table = {
     "tour_drop_body": {
         "en": "Drag a meeting recording here or press Choose file. Audio and video both work.",
         "ru": "Перетащите сюда запись встречи или нажмите «Выбрать файл». Подойдёт аудио и видео.",
+    },
+    "tour_record_title": {"en": "Record a meeting", "ru": "Запишите встречу"},
+    "tour_record_body": {
+        "en": "Record a call right on this Mac. Pick an app or all system sound and press Start"
+        " recording. When you stop, the recording goes to the queue.",
+        "ru": "Записывайте звонок прямо на этом Mac. Выберите приложение или весь системный звук"
+        " и нажмите «Начать запись». После остановки запись попадёт в очередь.",
     },
     "tour_language_title": {"en": "Recording language", "ru": "Язык записи"},
     "tour_language_body": {
@@ -228,8 +384,10 @@ STRINGS: Table = {
     "settings_saving": {"en": "Saving…", "ru": "Сохраняется…"},
     "settings_data": {"en": "Data", "ru": "Данные"},
     "settings_data_text": {
-        "en": "Transcripts, speech models and settings are kept in this folder.",
-        "ru": "В этой папке хранятся транскрипты, модели распознавания и настройки.",
+        "en": "Transcripts, speech models, settings and the audio you chose to save are kept in"
+        " this folder.",
+        "ru": "В этой папке хранятся транскрипты, модели распознавания, настройки и звук, который"
+        " вы решили сохранить.",
     },
     "settings_data_sources": {
         "en": "Recordings stay where they are, and LocTranscriptor doesn't copy them. Mail"
@@ -332,6 +490,7 @@ STRINGS: Table = {
         "ru": "Нажмите на имя, чтобы переименовать",
     },
     "speaker_n": MD_LABELS["speaker_n"],
+    "speaker_me": MD_LABELS["speaker_me"],
     "speaker_name_for": {"en": "Name for “{name}”", "ru": "Имя для «{name}»"},
     "transcript": MD_LABELS["transcript"],
     "delete_question": {"en": "Delete this meeting?", "ru": "Удалить встречу?"},
@@ -340,6 +499,10 @@ STRINGS: Table = {
         "ru": "Транскрипт удалится из архива. Это нельзя отменить.",
     },
     "cancel": {"en": "Cancel", "ru": "Отменить"},
+    "delete_text_audio": {
+        "en": "The transcript and the saved audio will be removed. This can't be undone.",
+        "ru": "Транскрипт и сохранённый звук удалятся. Это нельзя отменить.",
+    },
     "delete": {"en": "Delete", "ru": "Удалить"},
     # --- archive and search
     "search_label": {"en": "Search all transcripts", "ru": "Поиск по всем транскриптам"},

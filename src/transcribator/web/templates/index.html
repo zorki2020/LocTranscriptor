@@ -36,6 +36,109 @@
   </div>
   <div id="drop-status" class="drop-status" aria-live="polite"></div>
 </section>
+{% if app_mode %}
+{# Record block (app window only). app.js shows it when the native bridge exists, fills the
+   source and microphone lists from it and renders the status the app pushes. The texts for
+   error and warning codes sit in the hidden list at the end: CSP allows no inline scripts. #}
+<section id="rec" class="rec" data-tour="record" aria-labelledby="rec-title" aria-describedby="rec-hint" hidden>
+  <div class="rec-head">
+    <span class="rec-icon" aria-hidden="true"><span class="i i-record"></span></span>
+    <div class="rec-head-text">
+      <h2 class="rec-title" id="rec-title">{{ t("rec_title") }}</h2>
+      <p class="rec-hint" id="rec-hint">{{ t("rec_hint") }}</p>
+    </div>
+  </div>
+
+  <div class="rec-setup" id="rec-setup">
+    <div class="rec-row">
+      <label class="rec-label rec-row-text" for="rec-source">{{ t("rec_source_label") }}</label>
+      <div class="rec-control">
+        <select id="rec-source" class="select" data-all="{{ t("rec_source_all") }}">
+          <option value="all" selected>{{ t("rec_source_all") }}</option>
+        </select>
+      </div>
+    </div>
+    <div class="rec-row">
+      <div class="rec-row-text">
+        <label class="rec-label" for="rec-mic">{{ t("rec_mic_label") }}</label>
+        <p class="rec-row-hint" id="rec-mic-hint" data-hint="{{ t("rec_mic_hint") }}" data-none="{{ t("rec_mic_none") }}">{{ t("rec_mic_hint") }}</p>
+      </div>
+      <button type="button" class="switch" id="rec-mic" role="switch" aria-checked="false" aria-describedby="rec-mic-hint"></button>
+    </div>
+    <div class="rec-row">
+      <div class="rec-row-text">
+        <label class="rec-label" for="rec-keep">{{ t("rec_keep_label") }}</label>
+        <p class="rec-row-hint" id="rec-keep-hint">{{ t("rec_keep_hint") }}</p>
+      </div>
+      <button type="button" class="switch" id="rec-keep" role="switch" aria-checked="false" aria-describedby="rec-keep-hint"></button>
+    </div>
+    <div class="rec-row" id="rec-device-row" hidden>
+      <label class="rec-label rec-row-text" for="rec-device">{{ t("rec_mic_device") }}</label>
+      <div class="rec-control">
+        <select id="rec-device" class="select"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec-live" id="rec-live-view" tabindex="-1" hidden>
+    <div class="rec-status">
+      <span class="rec-dot" id="rec-dot" aria-hidden="true"></span>
+      <span class="spinner" id="rec-spinner" aria-hidden="true" hidden></span>
+      <span class="rec-state" id="rec-state"></span>
+      <span class="rec-time num" id="rec-time" role="timer">00:00</span>
+    </div>
+    <p class="rec-source-name" id="rec-source-name"></p>
+    <p class="rec-starting-hint" id="rec-starting-hint" data-any="{{ t("rec_starting_hint") }}" data-app="{{ t("rec_starting_app_hint") }}" hidden>{{ t("rec_starting_hint") }}</p>
+    {# The meters are decorative: the warnings below carry what matters. Their length is
+       the CSS variable --level, set from app.js (CSP allows no style attributes). #}
+    <div class="rec-meters" id="rec-meters" aria-hidden="true">
+      <div class="rec-meter" id="rec-meter-mic">
+        <span class="rec-meter-label"><span class="i i-mic"></span>{{ t("rec_level_mic") }}</span>
+        <span class="rec-meter-track"><span class="rec-meter-fill"></span></span>
+      </div>
+      <div class="rec-meter" id="rec-meter-system">
+        <span class="rec-meter-label"><span class="i i-wave"></span>{{ t("rec_level_system") }}</span>
+        <span class="rec-meter-track"><span class="rec-meter-fill"></span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="rec-notice" id="rec-notice" aria-live="polite"></div>
+
+  <div class="rec-actions">
+    <button type="button" class="btn btn-primary btn-lg" id="rec-start"><span class="i i-record" aria-hidden="true"></span>{{ t("rec_start") }}</button>
+    <button type="button" class="btn btn-danger btn-lg" id="rec-stop" hidden><span class="i i-stop" aria-hidden="true"></span><span id="rec-stop-label" data-stop="{{ t("rec_stop") }}" data-cancel="{{ t("rec_cancel") }}">{{ t("rec_stop") }}</span></button>
+  </div>
+
+  <div class="rec-result" id="rec-result" aria-live="polite"></div>
+  <div id="rec-announce" class="visually-hidden" aria-live="polite"></div>
+
+  {# Texts for app.js: state labels, the result line and the codes of errors and warnings. #}
+  <ul id="rec-texts" hidden
+    data-open-settings="{{ t("rec_open_settings") }}"
+    data-open-meeting="{{ t("rec_open_meeting") }}"
+    data-queued="{{ t("rec_queued") }}"
+    data-ended-early="{{ t("rec_ended_early") }}"
+    data-audio-not-saved="{{ t("rec_audio_not_saved") }}"
+    data-code="{{ t("error_code") }}"
+    data-starting="{{ t("rec_state_starting") }}"
+    data-recording="{{ t("rec_state_recording") }}"
+    data-stopping="{{ t("rec_state_stopping") }}"
+    data-with-mic="{{ t("rec_with_mic") }}">
+    {% for kind, code, pane in [
+      ("err", "already_recording", ""), ("err", "mic_denied", "mic"), ("err", "no_source", ""),
+      ("err", "source_gone", ""), ("err", "start_failed", ""), ("err", "disk_low", ""),
+      ("err", "finalize_failed", ""), ("err", "enqueue_failed", ""), ("err", "unknown", ""),
+      ("err", "bridge", ""), ("err", "max_duration", ""),
+      ("early", "source_gone", ""), ("early", "mic_denied", ""), ("early", "disk_low", ""),
+      ("early", "max_duration", ""), ("early", "unknown", ""),
+      ("warn", "silent_system", "systemAudio"), ("warn", "silent_mic", ""),
+      ("warn", "device_changed", ""), ("warn", "disk_low", "")] %}
+    <li data-kind="{{ kind }}" data-code="{{ code }}"{% if pane %} data-pane="{{ pane }}"{% endif %}>{{ t("rec_" ~ kind ~ "_" ~ code) }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 <div class="drop-lang" data-tour="language">
   <span class="i i-globe" aria-hidden="true"></span>
   <label for="language">{{ t("recording_language") }}</label>
@@ -71,7 +174,7 @@
   <section class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-body" tabindex="-1">
     <span class="tour-arrow" aria-hidden="true"></span>
     <div class="tour-top">
-      <span class="tour-dots" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <span class="tour-dots" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
       <span class="tour-count num" id="tour-count"></span>
     </div>
     <div class="tour-content">
@@ -86,6 +189,10 @@
   </section>
   <ol class="tour-steps" hidden>
     <li data-target="drop" data-place="bottom" data-title="{{ t("tour_drop_title") }}" data-body="{{ t("tour_drop_body") }}"></li>
+    {% if app_mode %}
+    {# Skipped by app.js when the block is hidden (the window has no recording bridge). #}
+    <li data-target="record" data-optional data-place="bottom" data-title="{{ t("tour_record_title") }}" data-body="{{ t("tour_record_body") }}"></li>
+    {% endif %}
     <li data-target="language" data-place="bottom" data-title="{{ t("tour_language_title") }}" data-body="{{ t("tour_language_body") }}"></li>
     <li data-target="queue" data-place="bottom" data-cap="280" data-title="{{ t("tour_queue_title") }}" data-body="{{ t("tour_queue_body_app") if app_mode else t("tour_queue_body") }}"></li>
     <li data-target="archive"{% if app_mode %} data-also="settings"{% endif %} data-place="bottom" data-title="{{ t("tour_archive_title") }}" data-body="{{ t("tour_archive_body") }}{% if app_mode %} {{ t("tour_archive_settings") }}{% endif %}"></li>

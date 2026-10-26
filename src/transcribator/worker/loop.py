@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import tempfile
 import threading
 import time
@@ -41,6 +42,7 @@ from transcribator.models import Transcript
 from transcribator.paths import db_path, uploads_dir, work_dir
 from transcribator.pipeline.audio import AudioError
 from transcribator.pipeline.isolated import keep_awake, kill_orphan_group, run_isolated
+from transcribator.pipeline.run import LAYOUT_MONO, LAYOUTS
 from transcribator.pipeline.tempfiles import cleanup_stale, job_prefix
 from transcribator.storage import db, repo
 
@@ -52,12 +54,19 @@ ORPHAN_UPLOAD_AGE_S = 3600
 FAILED_UPLOAD_TTL = timedelta(days=7)
 DB_RETRIES = 3
 SWEEP_S = 3600.0
-# Upload copy name: a random hex name only, no paths (same as in web/app.py).
-_UPLOAD_REF = re.compile(r"[0-9a-f]{32}")
+# Upload name: a random hex name only, no paths (same as in web/app.py), or a recording
+# finalized by the app (`rec` + random hex + `.wav`, same as in web/recordings.py).
+_UPLOAD_REF = re.compile(r"[0-9a-f]{32}|rec[0-9a-f]{24}\.wav")
+# A finalized app recording: the app retries the enqueue at its next launch, so the orphan
+# cleanup keeps it for `FAILED_UPLOAD_TTL` instead of `ORPHAN_UPLOAD_AGE_S`.
+_APP_RECORDING = re.compile(r"rec[0-9a-f]{24}\.wav")
+# Kept audio of an app recording (`audio/rec<hex>.m4a`, same shape as in web/recordings.py).
+_AUDIO_REF = re.compile(r"rec[0-9a-f]{24}\.m4a")
 RECOGNITION_LOCK = Path.home() / "Library/Caches/transcribator-recognition.lock"
 
 OnStart = Callable[[int], None]
-Processor = Callable[[Path, Path, OnStart, str], Transcript]
+# (recording, work dir, on_start, language, layout) -> transcript
+Processor = Callable[[Path, Path, OnStart, str, str], Transcript]
 T = TypeVar("T")
 
 
@@ -73,9 +82,18 @@ class JobError(Exception):
         self.code = code
 
 
-def process_isolated(src: Path, work: Path, on_start: OnStart, language: str = "en") -> Transcript:
+def process_isolated(
+    src: Path,
+    work: Path,
+    on_start: OnStart,
+    language: str = "en",
+    layout: str = LAYOUT_MONO,
+) -> Transcript:
     """Transcribe a recording in a child process under a network-less sandbox. `on_start`
-    receives the child's PGID: the worker stores it to stop the orphan after a crash."""
+    receives the child's PGID: the worker stores it to stop the orphan after a crash.
+    `layout` is the recording's channel layout (`pipeline.run.LAYOUTS`)."""
+    if layout not in LAYOUTS:
+        raise JobError("bad_layout")
     out = work / "transcript.json"
     metrics = work / "metrics.json"
     cmd = python_command(
@@ -87,6 +105,8 @@ def process_isolated(src: Path, work: Path, on_start: OnStart, language: str = "
         str(out),
         "--metrics-json",
         str(metrics),
+        "--layout",
+        layout,
     )
     child = run_isolated(cmd, timeout_s=PROCESS_TIMEOUT_S, low_priority=True, on_start=on_start)
     if child.timed_out:
@@ -153,10 +173,39 @@ class Worker:
         for entry in uploads_dir(self._root).iterdir():
             if entry.name in referenced or not entry.is_file():
                 continue
+            # A finalized app recording not enqueued yet waits for the app to retry the
+            # enqueue, but not forever: past the failed-upload retention it is an orphan too
+            # (the app rebuilds a recording from its session chunks if it still needs one).
+            max_age = (
+                FAILED_UPLOAD_TTL.total_seconds()
+                if _APP_RECORDING.fullmatch(entry.name)
+                else ORPHAN_UPLOAD_AGE_S
+            )
             with contextlib.suppress(OSError):
-                if now - entry.lstat().st_mtime > ORPHAN_UPLOAD_AGE_S:
+                if now - entry.lstat().st_mtime > max_age:
                     entry.unlink()
+        self.recover_audio(now)
         self.recover_uploads()
+
+    def recover_audio(self, now: float) -> None:
+        """Delete kept audio no meeting references. The app writes the m4a before it asks
+        to queue the recording, so a young file may be about to get its meeting: only files
+        older than the failed-upload retention go. Names of any other shape stay."""
+        folder = self._root / "audio"
+        if not folder.is_dir():
+            return
+        referenced = repo.audio_refs(self._conn)
+        max_age = FAILED_UPLOAD_TTL.total_seconds()
+        with contextlib.suppress(OSError):
+            for entry in folder.iterdir():
+                if entry.name in referenced or not _AUDIO_REF.fullmatch(entry.name):
+                    continue
+                with contextlib.suppress(OSError):
+                    info = entry.lstat()  # a link is judged (and removed) as itself
+                    if (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)) and (
+                        now - info.st_mtime > max_age
+                    ):
+                        entry.unlink()
 
     def recover_uploads(self) -> None:
         """Delete upload copies of failed meetings past their retention (temporary copies)."""
@@ -202,6 +251,7 @@ class Worker:
                     Path(tmp),
                     lambda pgid: repo.set_child(self._conn, job.id, pgid),
                     job.language,
+                    job.layout,
                 )
             repo.set_child(self._conn, job.id, None)
         except (JobError, AudioError, BackendError) as exc:

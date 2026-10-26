@@ -11,6 +11,7 @@ import re
 import string
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -100,7 +101,9 @@ def test_every_string_has_en_and_ru_with_same_placeholders() -> None:
 def test_russian_strings_are_translated() -> None:
     # Keys that are the same in both languages on purpose.
     same = {"lang_native_en", "lang_native_ru", "decimal_sep", "error_code"}
-    new_keys = [k for k in strings.STRINGS if k.startswith(("setup_", "settings_", "js_", "tour_"))]
+    new_keys = [
+        k for k in strings.STRINGS if k.startswith(("setup_", "settings_", "js_", "tour_", "rec_"))
+    ]
     assert new_keys
     for key in new_keys:
         if key in same:
@@ -424,14 +427,14 @@ def test_current_page_is_marked_once(lang: str) -> None:
 
 def test_tour_hooks(lang: str) -> None:
     app = index_page(app_mode=True)
-    for hook in ("drop", "language", "queue", "archive", "settings"):
+    for hook in ("drop", "record", "language", "queue", "archive", "settings"):
         assert app.count(f'data-tour="{hook}"') == 1, hook
     assert re.search(r'<section id="drop"[^>]*data-tour="drop"', app)
     assert re.search(r'data-tour="language">.*?<select id="language"', app, re.S)
     assert re.search(r'<a href="/meetings" data-tour="archive"', app)
     assert re.search(r'<a href="/settings" data-tour="settings"', app)
     browser = index_page(app_mode=False)
-    assert 'data-tour="settings"' not in browser
+    assert 'data-tour="settings"' not in browser and 'data-tour="record"' not in browser
     assert 'data-tour="drop"' in browser and 'data-tour="language"' in browser
 
 
@@ -568,15 +571,22 @@ def test_tour_markup_in_app(lang: str) -> None:
     for action, key in (("skip", "tour_skip"), ("back", "tour_back"), ("next", "tour_next")):
         assert re.search(rf'data-tour-action="{action}">{re.escape(strings.t(key))}</button>', html)
     steps = _steps(html)
-    assert [s["target"] for s in steps] == ["drop", "language", "queue", "archive"]
+    assert [s["target"] for s in steps] == ["drop", "record", "language", "queue", "archive"]
     for step in steps:
         assert html.count(f'data-tour="{step["target"]}"') == 1
     assert steps[0]["title"] == strings.t("tour_drop_title")
-    assert steps[2]["body"] == strings.t("tour_queue_body_app")
-    assert steps[3]["also"] == "settings"
-    assert steps[3]["body"] == strings.t("tour_archive_body") + " " + strings.t(
+    # The recording step is optional: app.js drops it while the block is hidden.
+    assert re.search(r'<li data-target="record" data-optional ', html)
+    assert steps[1]["title"] == strings.t("tour_record_title")
+    assert steps[1]["body"] == strings.t("tour_record_body")
+    assert steps[3]["body"] == strings.t("tour_queue_body_app")
+    assert steps[4]["also"] == "settings"
+    assert steps[4]["body"] == strings.t("tour_archive_body") + " " + strings.t(
         "tour_archive_settings"
     )
+    assert html.count('<span class="tour-dots"') == 1
+    dots = re.search(r'<span class="tour-dots"[^>]*>(.*?)</span></span>', html)
+    assert dots is not None and dots.group(1).count("<span>") >= len(steps)
 
 
 def test_tour_markup_in_browser(lang: str) -> None:
@@ -584,6 +594,7 @@ def test_tour_markup_in_browser(lang: str) -> None:
     assert 'id="tour"' in html
     assert "data-remember" not in html
     steps = _steps(html)
+    assert [s["target"] for s in steps] == ["drop", "language", "queue", "archive"]
     assert steps[2]["body"] == strings.t("tour_queue_body")
     assert "also" not in steps[3]
     assert steps[3]["body"] == strings.t("tour_archive_body")
@@ -624,3 +635,297 @@ def test_tour_css_respects_reduced_motion() -> None:
     assert ".tour-spot" in css and ".tour-card" in css and ".tour-arrow" in css
     reduced = css[css.index("@media (prefers-reduced-motion: reduce)") :]
     assert "transition-duration: 0.01ms" in reduced and ".tour-card.is-changing" in reduced
+
+
+# --- record block (app) ------------------------------------------------------------------
+
+REC_ERRORS = [
+    "already_recording",
+    "mic_denied",
+    "no_source",
+    "source_gone",
+    "start_failed",
+    "disk_low",
+    "finalize_failed",
+    "enqueue_failed",
+    "max_duration",
+]
+REC_EARLY = ["source_gone", "mic_denied", "disk_low", "max_duration", "unknown"]
+REC_WARNINGS = ["silent_system", "silent_mic", "device_changed", "disk_low"]
+
+
+def _rec_block(html: str) -> str:
+    match = re.search(r'<section id="rec".*?</section>', html, re.S)
+    assert match is not None
+    return match.group(0)
+
+
+def test_record_block_is_in_app_mode_only(lang: str) -> None:
+    html = index_page(app_mode=True)
+    block = _rec_block(html)
+    # Hidden until app.js finds the native bridge.
+    assert re.match(r"<section id=\"rec\" class=\"rec\"[^>]*\shidden>", block)
+    assert 'data-tour="record"' in block
+    text = visible_text(block)
+    for key in ("rec_title", "rec_hint", "rec_source_label", "rec_source_all", "rec_mic_label"):
+        assert strings.t(key) in text, key
+    for key in ("rec_start", "rec_stop", "rec_mic_hint", "rec_level_mic", "rec_level_system"):
+        assert strings.t(key) in text, key
+    # Source select with its label, microphone switch, device select, language is the shared one.
+    assert re.search(r'<label[^>]*for="rec-source"', block)
+    assert re.search(r'<select id="rec-source" class="select"', block)
+    assert re.search(
+        r'<button type="button" class="switch" id="rec-mic" role="switch" aria-checked="false"',
+        block,
+    )
+    assert re.search(r'<select id="rec-device" class="select">', block)
+    assert 'id="rec-start"' in block and 'id="rec-stop"' in block
+    assert re.search(r'id="rec-stop"[^>]*\shidden>', block)
+    assert 'id="rec-time"' in block and 'role="timer"' in block
+    assert (
+        'id="rec-notice" aria-live="polite"' in block
+        and 'id="rec-result" aria-live="polite"' in block
+    )
+    assert 'id="rec-announce" class="visually-hidden" aria-live="polite"' in block
+    assert block.count('id="language"') == 0 and html.count('id="language"') == 1
+    # The block sits between the drop zone and the language row.
+    assert html.index('id="drop"') < html.index('id="rec"') < html.index('class="drop-lang"')
+    # The browser install has none of it.
+    browser = index_page(app_mode=False)
+    assert 'id="rec"' not in browser and "rec-" not in browser
+    assert strings.t("rec_start") not in browser
+
+
+def test_record_block_has_every_error_and_warning_text(lang: str) -> None:
+    block = _rec_block(index_page(app_mode=True))
+    items = {
+        (kind, code): html_lib.unescape(text)
+        for kind, code, text in re.findall(
+            r'<li data-kind="(\w+)" data-code="(\w+)"[^>]*>(.*?)</li>', block, re.S
+        )
+    }
+    for code in [*REC_ERRORS, "unknown", "bridge"]:
+        assert items[("err", code)] == strings.t(f"rec_err_{code}"), code
+    for code in REC_WARNINGS:
+        assert items[("warn", code)] == strings.t(f"rec_warn_{code}"), code
+    for code in REC_EARLY:
+        assert items[("early", code)] == strings.t(f"rec_early_{code}"), code
+    assert f'data-ended-early="{html_lib.escape(strings.t("rec_ended_early"))}"' in block
+    # The fixes that live in System Settings come with a button.
+    assert re.search(r'data-code="mic_denied" data-pane="mic"', block)
+    assert re.search(r'data-code="silent_system" data-pane="systemAudio"', block)
+    for attr, key in (
+        ("open-settings", "rec_open_settings"),
+        ("open-meeting", "rec_open_meeting"),
+        ("queued", "rec_queued"),
+        ("starting", "rec_state_starting"),
+        ("recording", "rec_state_recording"),
+        ("stopping", "rec_state_stopping"),
+        ("with-mic", "rec_with_mic"),
+    ):
+        assert f'data-{attr}="{strings.t(key)}"' in block, attr
+
+
+def test_record_strings_exist_in_both_languages() -> None:
+    keys = [k for k in strings.STRINGS if k.startswith("rec_")]
+    assert len(keys) >= 30
+    for code in REC_ERRORS + ["unknown", "bridge"]:
+        assert f"rec_err_{code}" in strings.STRINGS, code
+    for code in REC_EARLY:
+        assert f"rec_early_{code}" in strings.STRINGS, code
+    for code in REC_WARNINGS:
+        assert f"rec_warn_{code}" in strings.STRINGS, code
+    for key in keys:
+        assert set(strings.STRINGS[key]) == {"en", "ru"}, key
+        assert re.search(r"[А-Яа-яЁё]", strings.STRINGS[key]["ru"]), key
+        assert not re.search(r"[А-Яа-яЁё]", strings.STRINGS[key]["en"]), key
+        # One sentence per message line plus at most one more, no line breaks, no dashes.
+        for text in strings.STRINGS[key].values():
+            assert "\n" not in text and "—" not in text and "\u2013" not in text, key
+
+
+def test_record_early_end_and_cancel_texts(lang: str) -> None:
+    assert "{reason}" in strings.STRINGS["rec_ended_early"]["en"]
+    assert "{reason}" in strings.STRINGS["rec_ended_early"]["ru"]
+    assert "12" in strings.t("rec_err_max_duration") and "12" in strings.t("rec_early_max_duration")
+    # A pinned app that never played anything: the text says so, not "the app quit".
+    assert "sound" in strings.STRINGS["rec_err_source_gone"]["en"]
+    assert "звука" in strings.STRINGS["rec_err_source_gone"]["ru"]
+    assert "starts playing sound" in strings.STRINGS["rec_starting_app_hint"]["en"]
+    assert strings.STRINGS["rec_cancel"] == {"en": "Cancel", "ru": "Отменить"}
+    block = _rec_block(index_page(app_mode=True))
+    assert re.search(
+        r'id="rec-stop-label" data-stop="[^"]+" data-cancel="' + strings.t("rec_cancel") + '"',
+        block,
+    )
+    assert 'data-any="' in block and 'data-app="' in block
+
+
+def test_record_buttons_are_verbs() -> None:
+    assert strings.STRINGS["rec_start"]["ru"] == "Начать запись"
+    assert strings.STRINGS["rec_stop"]["ru"] == "Остановить"
+
+
+def test_record_block_has_no_inline_code(lang: str) -> None:
+    block = _rec_block(index_page(app_mode=True))
+    assert "style=" not in block and "<script" not in block
+    assert re.search(r"\son[a-z]+\s*=", block) is None
+    assert "http://" not in block and "https://" not in block
+
+
+def test_app_js_recorder_contract() -> None:
+    script = (WEB / "static" / "app.js").read_text()
+    for marker in (
+        "window.transcribatorRecorder = { onStatus: recorder.onStatus }",
+        'type: "recording.status"',
+        'type: "recording.sources"',
+        'type: "recording.start"',
+        'type: "recording.stop"',
+        'type: "recording.openSettings"',
+        'describe("early", early)',
+        "texts.endedEarly",
+        "ui.stopLabel.dataset.cancel",
+        "ui.startingHint.dataset.app",
+        "cancelRequested",
+        "window.webkit?.messageHandlers?.transcribator",
+        'style.setProperty("--level"',
+        'new Event("options-changed")',
+        'new Event("combo-open")',
+        "textContent",
+    ):
+        assert marker in script, marker
+    # The hook is defined before the first status call is made.
+    assert script.index("window.transcribatorRecorder =") < script.index("recorder.init();")
+    # Warnings and results are built from text nodes, never from markup.
+    assert ".style.cssText" not in script and 'setAttribute("style"' not in script
+
+
+def test_record_css_has_dark_theme_focus_and_reduced_motion() -> None:
+    css = (WEB / "static" / "app.css").read_text()
+    for selector in (".rec {", ".switch {", ".rec-meter-fill {", ".msg-warn {", ".rec-time {"):
+        assert selector in css, selector
+    assert "var(--level, 0)" in css
+    # Only palette tokens and no gradients in the new block; the switch thumb is plain white.
+    block = css[
+        css.index("/* --- record block (app)") : css.index("progress {\n  -webkit-appearance")
+    ]
+    assert "gradient" not in block
+    assert re.findall(r"#[0-9a-fA-F]{3,8}\b", block) == ["#fff"]
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)") :]
+    assert ".rec-meter-fill" in reduced and ".switch" in reduced
+    for icon in ("record", "stop", "mic"):
+        assert f'.i-{icon} {{ --icon: url("/static/icons/{icon}.svg"); }}' in css
+        assert (WEB / "static" / "icons" / f"{icon}.svg").is_file()
+
+
+# --- microphone speaker ------------------------------------------------------------------
+
+
+def test_me_speaker_placeholder_is_not_numbered(lang: str) -> None:
+    speakers = [
+        {"label": "ME", "shown": "Me", "name": "", "index": "", "spk": "spk-1"},
+        {"label": "S1", "shown": "Speaker 1", "name": "", "index": "1", "spk": "spk-2"},
+        {"label": "S2", "shown": "Speaker 2", "name": "", "index": "2", "spk": "spk-3"},
+    ]
+    meeting = SimpleNamespace(id=7, status="done", title="T", recorded_at=None, duration_s=60)
+    html = render(
+        "meeting.html",
+        meeting=meeting,
+        speakers=speakers,
+        segments=[],
+        stage=None,
+        started=None,
+        language=None,
+        long=False,
+        nav="list",
+    )
+    placeholders = re.findall(r'class="inline inline-speaker"[^>]*placeholder="([^"]*)"', html)
+    assert placeholders == [
+        strings.t("speaker_me"),
+        strings.t("speaker_n", n=1),
+        strings.t("speaker_n", n=2),
+    ]
+    assert strings.t("speaker_me") == ("Me" if lang == "en" else "Я")
+    assert len(set(re.findall(r'id="(spk-form-[^"]*)"', html))) == 3
+
+
+# --- keep the audio (app) ----------------------------------------------------------------
+
+
+def _meeting_page(**extra: Any) -> str:
+    meeting = SimpleNamespace(id=7, status="done", title="T", recorded_at=None, duration_s=60)
+    return render(
+        "meeting.html",
+        meeting=meeting,
+        speakers=[],
+        segments=[],
+        stage=None,
+        started=None,
+        language=None,
+        long=False,
+        nav="list",
+        **extra,
+    )
+
+
+def test_keep_audio_switch_is_in_the_record_block_only(lang: str) -> None:
+    block = _rec_block(index_page(app_mode=True))
+    assert re.search(
+        r'<button type="button" class="switch" id="rec-keep" role="switch" aria-checked="false"'
+        r' aria-describedby="rec-keep-hint">',
+        block,
+    )
+    assert re.search(
+        r'<label[^>]*for="rec-keep"[^>]*>' + re.escape(strings.t("rec_keep_label")), block
+    )
+    assert re.search(r'id="rec-keep-hint">' + re.escape(strings.t("rec_keep_hint")), block)
+    match = re.search(r'data-audio-not-saved="([^"]*)"', block)
+    assert match and html_lib.unescape(match.group(1)) == strings.t("rec_audio_not_saved")
+    # The switch starts off and sits in the setup part, which is hidden while recording.
+    assert (
+        block.index('id="rec-setup"')
+        < block.index('id="rec-keep"')
+        < block.index('id="rec-live-view"')
+    )
+    browser = index_page(app_mode=False)
+    assert "rec-keep" not in browser and strings.t("rec_keep_label") not in browser
+
+
+def test_keep_audio_strings_exist_in_both_languages() -> None:
+    for key in ("rec_keep_label", "rec_keep_hint", "rec_audio_not_saved", "audio_download"):
+        assert set(strings.STRINGS[key]) == {"en", "ru"}, key
+        assert re.search(r"[А-Яа-яЁё]", strings.STRINGS[key]["ru"]), key
+        assert not re.search(r"[А-Яа-яЁё]", strings.STRINGS[key]["en"]), key
+    assert set(strings.STRINGS["delete_text_audio"]) == {"en", "ru"}
+
+
+def test_app_js_keep_audio_contract() -> None:
+    script = (WEB / "static" / "app.js").read_text()
+    for marker in (
+        "keepAudio: keep",
+        "reply.last.keepAudio",
+        "status.audioSaved === false",
+        "texts.audioNotSaved",
+        'q("rec-keep")',
+        "ui.keep.disabled = active",
+    ):
+        assert marker in script, marker
+
+
+def test_meeting_page_offers_audio_only_when_it_exists(lang: str) -> None:
+    link = '<a class="btn" href="/meetings/7/audio" download>'
+    with_audio = _meeting_page(has_audio=True)
+    assert link in with_audio
+    assert strings.t("audio_download") in visible_text(with_audio)
+    assert strings.t("delete_text_audio") in visible_text(with_audio)
+    for html in (_meeting_page(has_audio=False), _meeting_page()):
+        assert "/audio" not in html
+        assert strings.t("audio_download") not in html
+        assert strings.t("delete_text") in visible_text(html)
+        assert strings.t("delete_text_audio") not in visible_text(html)
+
+
+def test_meeting_page_with_audio_has_no_inline_code(lang: str) -> None:
+    html = _meeting_page(has_audio=True)
+    assert "style=" not in html and "<script" in html
+    assert re.search(r"\son[a-z]+\s*=", html) is None

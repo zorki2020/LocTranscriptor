@@ -40,6 +40,9 @@ public enum Text: CaseIterable, Sendable {
     case moveTitle, moveText, ok, loginApprovalTitle, loginApprovalText, openLoginItems
     case loginFailed, loginNeedsApplications, saveFailed, stoppingWindow
     case pickMessage, pickButton
+    // recording
+    case recordingStart, recordingStop, recordingStarting, recordingSaved, recordingRecovered
+    case recordingSaving, openSystemSettings
 
     public func string(_ lang: Lang) -> String {
         let (en, ru) = pair
@@ -121,6 +124,13 @@ public enum Text: CaseIterable, Sendable {
         case .stoppingWindow: ("Stopping LocTranscriptor…", "LocTranscriptor завершает работу…")
         case .pickMessage: ("Choose meeting recordings", "Выберите записи встреч")
         case .pickButton: ("Add", "Добавить")
+        case .recordingStart: ("Start Recording", "Начать запись")
+        case .recordingStop: ("Stop Recording", "Остановить запись")
+        case .recordingStarting: ("Starting the recording…", "Запись начинается…")
+        case .recordingSaved: ("Recording added to the queue", "Запись добавлена в очередь")
+        case .recordingRecovered: ("Recovered recording", "Восстановленная запись")
+        case .recordingSaving: ("Saving the recording…", "Запись сохраняется…")
+        case .openSystemSettings: ("Open System Settings", "Открыть системные настройки")
         }
     }
 }
@@ -157,5 +167,64 @@ public enum L10n {
         if status.processing > 0 { parts.append(processing(status.processing, lang)) }
         if status.error > 0 { parts.append(failed(status.error, lang)) }
         return parts.joined(separator: " · ")
+    }
+
+    /// "00:12:34", the timer of a recording.
+    public static func clock(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds))
+        return String(format: "%02d:%02d:%02d", total / 3600, total % 3600 / 60, total % 60)
+    }
+
+    /// Status line of the menu bar item while a recording runs.
+    public static func recordingLine(_ status: RecordingStatus, _ lang: Lang) -> String? {
+        switch status.state {
+        case .idle: return nil
+        case .starting: return Text.recordingStarting.string(lang)
+        case .recording:
+            let word = lang == .ru ? "Идёт запись" : "Recording"
+            return "\(word) · \(clock(status.elapsedS))"
+        case .stopping: return Text.recordingSaving.string(lang)
+        case .queued:
+            // A recording that ended early is saved and queued, but the user must see that it
+            // did not end the way it was meant to.
+            if let reason = endedEarlyReason(status) { return recordingError(reason, lang) }
+            return Text.recordingSaved.string(lang)
+        case .failed: return status.error.map { recordingError($0, lang) } ?? Text.recordingSaving.string(lang)
+        }
+    }
+
+    /// Why a queued recording stopped before the user pressed Stop, if it did.
+    public static func endedEarlyReason(_ status: RecordingStatus) -> RecordingError? {
+        guard status.state == .queued else { return nil }
+        if let error = status.error { return error }
+        return status.warning == .diskLow ? .diskLow : nil
+    }
+
+    public static func recordingError(_ error: RecordingError, _ lang: Lang) -> String {
+        let (en, ru): (String, String)
+        switch error {
+        case .alreadyRecording: (en, ru) = ("A recording is already in progress.", "Запись уже идёт.")
+        case .micDenied:
+            (en, ru) = ("No access to the microphone. Allow it in System Settings, Privacy & Security, Microphone.",
+                        "Нет доступа к микрофону. Разрешите его в Системных настройках, в разделе «Конфиденциальность и безопасность», пункт «Микрофон».")
+        case .noSource: (en, ru) = ("Choose what to record.", "Выберите, что записывать.")
+        case .sourceGone:
+            (en, ru) = ("The app you were recording closed. What was recorded is saved.",
+                        "Приложение, которое вы записывали, закрылось. Записанное сохранено.")
+        case .startFailed:
+            (en, ru) = ("Couldn't start the recording. Check that LocTranscriptor may record system audio in System Settings, Privacy & Security.",
+                        "Не удалось начать запись. Проверьте, что LocTranscriptor разрешена запись системного звука в Системных настройках, в разделе «Конфиденциальность и безопасность».")
+        case .diskLow:
+            (en, ru) = ("The disk is almost full. The recording stopped and what was recorded is saved.",
+                        "На диске почти нет места. Запись остановлена, записанное сохранено.")
+        case .finalizeFailed: (en, ru) = ("Couldn't save the recording.", "Не удалось сохранить запись.")
+        case .maxDuration:
+            (en, ru) = ("The recording reached the limit of 12 hours. It stopped and is saved.",
+                        "Запись достигла предела в 12 часов. Она остановлена и сохранена.")
+        case .enqueueFailed:
+            (en, ru) = ("The recording is saved but not added to the queue. It will be added when you open LocTranscriptor again.",
+                        "Запись сохранена, но не добавлена в очередь. Она добавится, когда вы снова откроете LocTranscriptor.")
+        }
+        return lang == .ru ? ru : en
     }
 }

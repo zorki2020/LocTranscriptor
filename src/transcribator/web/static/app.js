@@ -498,20 +498,28 @@
     list.setAttribute("role", "listbox");
     list.setAttribute("popover", "manual");
     if (label) list.setAttribute("aria-labelledby", label.id);
-    const options = Array.from(select.options, function (opt, i) {
-      const el = document.createElement("div");
-      el.className = "option";
-      el.id = base + "-opt-" + i;
-      el.setAttribute("role", "option");
-      el.setAttribute("aria-selected", "false");
-      if (opt.lang) el.lang = opt.lang;
-      if (opt.disabled) el.setAttribute("aria-disabled", "true");
-      const text = document.createElement("span");
-      text.textContent = opt.textContent;
-      el.append(text, icon("check"));
-      list.append(el);
-      return el;
-    });
+    const options = [];
+    // The popup options mirror the native ones. A script that changes the native options
+    // (the recorder's source list) sends "options-changed" and they are built again.
+    function build() {
+      list.replaceChildren();
+      options.length = 0;
+      Array.from(select.options).forEach(function (opt, i) {
+        const el = document.createElement("div");
+        el.className = "option";
+        el.id = base + "-opt-" + i;
+        el.setAttribute("role", "option");
+        el.setAttribute("aria-selected", "false");
+        if (opt.lang) el.lang = opt.lang;
+        if (opt.disabled) el.setAttribute("aria-disabled", "true");
+        const text = document.createElement("span");
+        text.textContent = opt.textContent;
+        el.append(text, icon("check"));
+        list.append(el);
+        options.push(el);
+      });
+    }
+    build();
     if (canAnchor) {
       button.style.setProperty("anchor-name", "--" + base);
       list.style.setProperty("position-anchor", "--" + base);
@@ -571,6 +579,8 @@
 
     function openList(where) {
       if (open || button.disabled) return;
+      // Lets a script refresh the options before the list is shown ("combo-open").
+      select.dispatchEvent(new Event("combo-open"));
       open = true;
       viaKeys = false;
       openCombos.add(closeList);
@@ -696,6 +706,12 @@
       button.focus();
     });
     select.addEventListener("change", sync);
+    select.addEventListener("options-changed", function () {
+      build();
+      button.disabled = select.disabled;
+      sync();
+      if (open) setActive(enabled(select.selectedIndex) ? select.selectedIndex : step(-1, 1));
+    });
     sync();
   }
 
@@ -725,9 +741,517 @@
   const enhanceSelects = (root) => root?.querySelectorAll?.("select.select").forEach(enhanceSelect);
   document.addEventListener("htmx:load", (event) => enhanceSelects(event.detail?.elt));
 
+  // --- recording (app only) -----------------------------------------------------------
+  //
+  // The Record block of the upload page drives the native recorder over the same bridge:
+  // recording.sources, .start, .stop, .status and .openSettings. The app pushes its status
+  // to window.transcribatorRecorder.onStatus on every change and once a second while it
+  // records; a slow poll covers a missed push. Messages for error and warning codes come
+  // from the hidden list #rec-texts. The block stays hidden without the bridge, so the
+  // browser install never shows it.
+
+  const recorder = (function () {
+    const WATCH_MS = 5000;
+    const KNOWN = ["idle", "starting", "recording", "stopping", "queued", "failed"];
+    const ACTIVE = ["starting", "recording", "stopping"];
+
+    let root = null;
+    let ui = {};
+    let texts = {};
+    let sources = { apps: [], microphones: [], last: null, micPermission: "undetermined" };
+    let apps = new Map(); // option value -> app group from recording.sources
+    let state = "idle";
+    let status = null;
+    let micOn = false;
+    let keepOn = false;
+    let micId = null;
+    let pending = ""; // "start" while the start call is out
+    let cancelling = false; // a stop (or cancel) call is out
+    let cancelRequested = false; // the user cancelled while the start call was out
+    let startToken = 0;
+    let noticeKey = "";
+    let resultKey = "";
+    let sawDiskLow = false;
+    let lastState = "";
+    let refreshing = null;
+    let firstFill = true;
+
+    const pad = (n) => String(n).padStart(2, "0");
+
+    function clock(seconds) {
+      const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      return h > 0 ? pad(h) + ":" + pad(m) + ":" + pad(s) : pad(m) + ":" + pad(s);
+    }
+
+    const level = (value) => (Number.isFinite(value) ? Math.sqrt(Math.min(1, Math.max(0, value))) : 0);
+    const isActive = () => ACTIVE.includes(state);
+    const appKey = (app) => "app:" + app.bundleIds.slice().sort().join(",");
+
+    // The sentence for a code, with the System Settings pane that fixes it, if there is one.
+    function describe(kind, code) {
+      const known = root.querySelector('#rec-texts [data-kind="' + kind + '"][data-code="' + CSS.escape(String(code)) + '"]');
+      const fallback = kind === "err" || kind === "early" ? root.querySelector('#rec-texts [data-kind="' + kind + '"][data-code="unknown"]') : null;
+      const item = known || fallback;
+      return { text: item ? item.textContent : "", pane: item?.dataset.pane || "" };
+    }
+
+    // A message line. The same line is not rebuilt on every push: that would restart its
+    // entrance and drop the focus from its button.
+    function message(level, text, parts) {
+      const box = document.createElement("div");
+      box.className = "msg msg-" + level;
+      const span = document.createElement("span");
+      span.className = "msg-text";
+      span.textContent = text;
+      box.append(span);
+      (parts || []).forEach((part) => box.append(part));
+      return box;
+    }
+
+    function settingsButton(pane) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn-sm msg-action";
+      button.dataset.recSettings = pane;
+      button.textContent = texts.openSettings;
+      return button;
+    }
+
+    function codeTag(code) {
+      const tag = document.createElement("span");
+      tag.className = "code";
+      tag.textContent = texts.code.split("{code}").join(code);
+      return tag;
+    }
+
+    const safeCode = (code) => (typeof code === "string" && /^[a-z_]{1,32}$/.test(code) ? code : "unknown");
+
+    function setSlot(slot, key, build) {
+      if (key === "") slot.replaceChildren();
+      else slot.replaceChildren(build());
+    }
+
+    function showNotice(key, build) {
+      if (key === noticeKey) return;
+      noticeKey = key;
+      setSlot(ui.notice, key, build);
+    }
+
+    function showResult(key, build) {
+      if (key === resultKey) return;
+      resultKey = key;
+      setSlot(ui.result, key, build);
+      renderNotice();
+    }
+
+    function clearResult() {
+      sawDiskLow = false;
+      showResult("", null);
+    }
+
+    // The warning, or the microphone hint before a recording starts.
+    function renderNotice() {
+      let code = "";
+      // After the recording is queued the result line carries a disk warning itself.
+      if (status && status.warning && state !== "idle" && state !== "queued") code = safeCode(status.warning);
+      if (code) {
+        const info = describe("warn", code);
+        if (!info.text) code = "";
+        else showNotice("warn:" + code, () => message("warn", info.text, info.pane ? [settingsButton(info.pane)] : []));
+      }
+      if (!code && !isActive() && !resultKey && micOn && sources.micPermission === "denied") {
+        const info = describe("err", "mic_denied");
+        showNotice("pre:mic_denied", () => message("warn", info.text, [settingsButton(info.pane)]));
+      } else if (!code) {
+        showNotice("", null);
+      }
+    }
+
+    function renderResult() {
+      if (state === "queued" && status) {
+        const id = Number(status.meetingId);
+        // An error on a queued recording means it ended early: what was recorded is saved.
+        const early = status.error ? safeCode(status.error) : "";
+        // The audio was asked for but could not be kept; the transcript is made anyway.
+        const lost = Boolean(status.keepAudio) && status.audioSaved === false;
+        const key = "queued:" + (Number.isInteger(id) && id > 0 ? id : 0) + ":" + sawDiskLow + ":" + early + ":" + lost;
+        showResult(key, function () {
+          const parts = [];
+          if (Number.isInteger(id) && id > 0) {
+            const link = document.createElement("a");
+            link.className = "msg-action";
+            link.href = "/meetings/" + id;
+            link.textContent = texts.openMeeting;
+            parts.push(link);
+          }
+          if (early) {
+            const reason = describe("early", early);
+            let text = texts.endedEarly.split("{reason}").join(reason.text);
+            if (lost) text += " " + texts.audioNotSaved;
+            return message("warn", text, parts);
+          }
+          const box = message("ok", texts.queued, parts);
+          if (sawDiskLow) {
+            box.querySelector(".msg-text").textContent += " " + describe("warn", "disk_low").text;
+          }
+          if (lost) box.querySelector(".msg-text").textContent += " " + texts.audioNotSaved;
+          return box;
+        });
+      } else if (state === "failed") {
+        const code = safeCode(status && status.error);
+        showResult("failed:" + code, () => errorLine(code));
+      }
+    }
+
+    function errorLine(code) {
+      const info = describe("err", code);
+      const parts = info.pane ? [settingsButton(info.pane)] : [];
+      parts.push(codeTag(code));
+      return message("error", info.text, parts);
+    }
+
+    function sourceLabel(source) {
+      const name = source && source.kind === "app" && typeof source.name === "string" ? source.name : "";
+      return name || ui.source.dataset.all;
+    }
+
+    function announce(text) {
+      ui.announce.textContent = "";
+      window.setTimeout(function () {
+        ui.announce.textContent = text;
+      }, 60);
+    }
+
+    // Keyboard focus stays in the block when the button it was on goes away.
+    function keepFocus(had) {
+      if (!had) return;
+      const now = document.activeElement;
+      const target = !ui.stop.hidden ? ui.stop : !ui.start.hidden && !ui.start.disabled ? ui.start : ui.live;
+      const stale = !now || now === document.body || now.getClientRects().length === 0 || (now === ui.live && target !== ui.live);
+      if (stale) target.focus({ preventScroll: true });
+    }
+
+    function render(next) {
+      const had = root.contains(document.activeElement);
+      status = next;
+      state = next.state;
+      const active = isActive();
+      ui.setup.hidden = active;
+      ui.live.hidden = !active;
+      ui.start.hidden = active;
+      // While starting, the same button cancels: a start can wait on a permission dialog or
+      // on a chosen app that has not played any sound yet.
+      ui.stop.hidden = state !== "recording" && state !== "starting";
+      ui.stop.classList.toggle("btn-danger", state !== "starting");
+      ui.stopLabel.textContent = state === "starting" ? ui.stopLabel.dataset.cancel : ui.stopLabel.dataset.stop;
+      ui.start.disabled = pending === "start";
+      ui.keep.disabled = active;
+      ui.stop.disabled = cancelling;
+      ui.dot.hidden = state !== "recording";
+      ui.spinner.hidden = state === "recording" || !active;
+      ui.startingHint.hidden = state !== "starting";
+      ui.startingHint.textContent =
+        next.source && next.source.kind === "app" ? ui.startingHint.dataset.app : ui.startingHint.dataset.any;
+      ui.state.textContent = texts[state] || "";
+      ui.time.textContent = clock(next.elapsedS);
+      const mic = Boolean(next.mic);
+      ui.sourceName.textContent = sourceLabel(next.source) + (mic ? " · " + texts.withMic : "");
+      ui.meterMic.hidden = !mic;
+      ui.meters.hidden = state === "starting";
+      ui.fillMic.style.setProperty("--level", String(level(next.level && next.level.mic)));
+      ui.fillSystem.style.setProperty("--level", String(level(next.level && next.level.system)));
+      if (state === "recording" || state === "starting") clearResult();
+      if (next.warning === "disk_low") sawDiskLow = true;
+      renderNotice();
+      renderResult();
+      if (state !== lastState) {
+        const wasActive = ACTIVE.includes(lastState);
+        lastState = state;
+        if (active) announce(texts[state]);
+        else if (state === "queued") refreshQueue();
+        // What can be recorded changes while a recording runs: look again once it is over.
+        if (wasActive && !active) refreshSources();
+      }
+      keepFocus(had);
+    }
+
+    function accept(raw) {
+      if (!raw || typeof raw !== "object" || !KNOWN.includes(raw.state)) return null;
+      return raw;
+    }
+
+    // Called by the app. Ignored while a start or stop call is still out, so a push that
+    // left before the call doesn't flip the block back for a moment.
+    function onStatus(raw) {
+      if (!root || root.hidden) return;
+      const next = accept(raw);
+      if (!next) return;
+      if (pending === "start" && next.state === "idle") return;
+      if (cancelling && (next.state === "recording" || next.state === "starting")) return;
+      render(next);
+    }
+
+    async function pull() {
+      try {
+        onStatus(await bridge({ type: "recording.status" }));
+      } catch (e) {
+        // The next push or poll tries again.
+      }
+    }
+
+    // --- sources and devices ------------------------------------------------------------
+
+    function option(value, label) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      return opt;
+    }
+
+    function fillSources() {
+      const select = ui.source;
+      let want = select.value || "all";
+      const list = Array.isArray(sources.apps) ? sources.apps.filter((a) => a && typeof a.name === "string" && Array.isArray(a.bundleIds)) : [];
+      const last = sources.last && sources.last.source;
+      if (firstFill && last && last.kind === "app" && Array.isArray(last.bundleIds)) {
+        const match = list.find((a) => a.bundleIds.some((id) => last.bundleIds.includes(id)));
+        if (match) want = appKey(match);
+      }
+      firstFill = false;
+      // The app that was chosen stays in the list even after it quits: the choice isn't
+      // changed behind the user's back, and starting says the app is gone.
+      const kept = apps.get(want);
+      const rows = list.slice().sort((a, b) => Number(Boolean(b.outputting)) - Number(Boolean(a.outputting)));
+      apps = new Map(rows.map((a) => [appKey(a), a]));
+      if (want !== "all" && !apps.has(want) && kept) {
+        apps.set(want, kept);
+        rows.push(kept);
+      }
+      select.replaceChildren(option("all", select.dataset.all), ...rows.map((a) => option(appKey(a), a.name)));
+      select.value = apps.has(want) ? want : "all";
+      select.dispatchEvent(new Event("options-changed"));
+    }
+
+    function fillDevices() {
+      const select = ui.device;
+      const list = Array.isArray(sources.microphones) ? sources.microphones.filter((m) => m && typeof m.id === "string" && typeof m.name === "string") : [];
+      const lastId = sources.last && sources.last.micId;
+      const preferred = micId || lastId || (list.find((m) => m.isDefault) || list[0] || {}).id || "";
+      select.replaceChildren(...list.map((m) => option(m.id, m.name)));
+      select.value = list.some((m) => m.id === preferred) ? preferred : (list[0] || {}).id || "";
+      micId = select.value || null;
+      select.dispatchEvent(new Event("options-changed"));
+      ui.mic.disabled = list.length === 0;
+      if (list.length === 0) micOn = false;
+      ui.mic.setAttribute("aria-checked", String(micOn));
+      ui.micHint.textContent = list.length === 0 ? ui.micHint.dataset.none : ui.micHint.dataset.hint;
+      ui.deviceRow.hidden = !(micOn && list.length > 1);
+    }
+
+    let initialMic = true;
+
+    function refreshSources() {
+      if (isActive() || pending) return Promise.resolve();
+      if (refreshing) return refreshing;
+      refreshing = bridge({ type: "recording.sources" })
+        .then(function (reply) {
+          if (!reply || typeof reply !== "object") return;
+          sources = reply;
+          if (initialMic) {
+            micOn = Boolean(reply.last && reply.last.micEnabled);
+            keepOn = Boolean(reply.last && reply.last.keepAudio);
+            ui.keep.setAttribute("aria-checked", String(keepOn));
+            initialMic = false;
+          }
+          fillSources();
+          fillDevices();
+          renderNotice();
+        })
+        .catch(function () {
+          // The list keeps what it had: "All system audio" always works.
+        })
+        .finally(function () {
+          refreshing = null;
+        });
+      return refreshing;
+    }
+
+    // --- actions ------------------------------------------------------------------------
+
+    function chosenSource() {
+      const app = apps.get(ui.source.value);
+      if (!app) return { kind: "all" };
+      return { kind: "app", bundleIds: app.bundleIds, name: app.name };
+    }
+
+    async function start() {
+      if (pending || isActive()) return;
+      clearResult();
+      const source = chosenSource();
+      const mic = micOn;
+      const keep = keepOn;
+      pending = "start";
+      cancelRequested = false;
+      startToken += 1;
+      const token = startToken;
+      render({ state: "starting", elapsedS: 0, mic: mic, keepAudio: keep, audioSaved: null, source: source, level: { mic: 0, system: 0 }, warning: null, error: null, meetingId: null });
+      let reply = null;
+      try {
+        reply = await bridge({
+          type: "recording.start",
+          source: source,
+          mic: { enabled: mic, id: mic ? micId : null },
+          keepAudio: keep,
+          language: byId("language")?.value || "en",
+          title: null,
+        });
+      } catch (e) {
+        reply = { ok: false, error: "bridge" };
+      }
+      // A cancel, or a newer start, has already taken over.
+      if (token !== startToken) return;
+      const cancelled = cancelRequested;
+      cancelRequested = false;
+      pending = "";
+      if (reply && reply.ok === true) {
+        await pull();
+        return;
+      }
+      render({ state: "idle", elapsedS: 0, mic: false, source: source, level: { mic: 0, system: 0 }, warning: null, error: null, meetingId: null });
+      if (!cancelled) {
+        const code = safeCode(reply && reply.error);
+        showResult("start:" + code, () => errorLine(code));
+      }
+      refreshSources();
+    }
+
+    // Stop while recording, cancel while starting. Cancelling releases the start call even
+    // if the app never answers it.
+    async function stop() {
+      if (cancelling || (state !== "recording" && state !== "starting")) return;
+      const wasStarting = state === "starting";
+      cancelling = true;
+      ui.stop.disabled = true;
+      if (wasStarting && pending === "start") {
+        cancelRequested = true;
+        startToken += 1;
+        pending = "";
+      }
+      try {
+        await bridge({ type: "recording.stop" });
+      } catch (e) {
+        cancelling = false;
+        ui.stop.disabled = false;
+        showResult("stop:bridge", () => errorLine("bridge"));
+        return;
+      }
+      cancelling = false;
+      await pull();
+    }
+
+    function openSettings(pane) {
+      bridge({ type: "recording.openSettings", pane: pane }).catch(function () {});
+    }
+
+    function toggleMic() {
+      if (ui.mic.disabled) return;
+      micOn = !micOn;
+      ui.mic.setAttribute("aria-checked", String(micOn));
+      ui.deviceRow.hidden = !(micOn && ui.device.options.length > 1);
+      renderNotice();
+    }
+
+    function toggleKeep() {
+      if (ui.keep.disabled) return;
+      keepOn = !keepOn;
+      ui.keep.setAttribute("aria-checked", String(keepOn));
+    }
+
+    function collect() {
+      root = byId("rec");
+      if (!root) return false;
+      const list = root.querySelector("#rec-texts");
+      texts = {
+        openSettings: list.dataset.openSettings,
+        openMeeting: list.dataset.openMeeting,
+        queued: list.dataset.queued,
+        code: list.dataset.code,
+        starting: list.dataset.starting,
+        recording: list.dataset.recording,
+        stopping: list.dataset.stopping,
+        withMic: list.dataset.withMic,
+        endedEarly: list.dataset.endedEarly,
+        audioNotSaved: list.dataset.audioNotSaved,
+      };
+      const q = (id) => root.querySelector("#" + id);
+      ui = {
+        setup: q("rec-setup"),
+        source: q("rec-source"),
+        mic: q("rec-mic"),
+        micHint: q("rec-mic-hint"),
+        keep: q("rec-keep"),
+        deviceRow: q("rec-device-row"),
+        device: q("rec-device"),
+        live: q("rec-live-view"),
+        dot: q("rec-dot"),
+        spinner: q("rec-spinner"),
+        state: q("rec-state"),
+        time: q("rec-time"),
+        sourceName: q("rec-source-name"),
+        startingHint: q("rec-starting-hint"),
+        meters: q("rec-meters"),
+        meterMic: q("rec-meter-mic"),
+        fillMic: q("rec-meter-mic").querySelector(".rec-meter-fill"),
+        fillSystem: q("rec-meter-system").querySelector(".rec-meter-fill"),
+        notice: q("rec-notice"),
+        result: q("rec-result"),
+        announce: q("rec-announce"),
+        start: q("rec-start"),
+        stop: q("rec-stop"),
+        stopLabel: q("rec-stop-label"),
+      };
+      return true;
+    }
+
+    async function init() {
+      if (!collect() || !window.webkit?.messageHandlers?.transcribator) return;
+      root.hidden = false;
+      ui.start.addEventListener("click", start);
+      ui.stop.addEventListener("click", stop);
+      ui.mic.addEventListener("click", toggleMic);
+      ui.keep.addEventListener("click", toggleKeep);
+      ui.device.addEventListener("change", function () {
+        micId = ui.device.value || null;
+      });
+      ui.source.addEventListener("combo-open", refreshSources);
+      ui.device.addEventListener("combo-open", refreshSources);
+      root.addEventListener("click", function (event) {
+        const target = event.target instanceof Element ? event.target.closest("[data-rec-settings]") : null;
+        if (target) openSettings(target.dataset.recSettings);
+      });
+      document.addEventListener("visibilitychange", function () {
+        if (!document.hidden) pull();
+      });
+      window.setInterval(function () {
+        if (isActive() && !document.hidden) pull();
+      }, WATCH_MS);
+      await pull();
+      await refreshSources();
+    }
+
+    return { init: init, onStatus: onStatus };
+  })();
+
+  // Defined before the first recording.status call, so a push from the app never finds
+  // it missing. Pages without the block ignore the push.
+  window.transcribatorRecorder = { onStatus: recorder.onStatus };
+
   // --- first-run tips -----------------------------------------------------------------
   //
-  // Four steps on the upload page, each pointing at an element with data-tour="name": a
+  // A few steps on the upload page, each pointing at an element with data-tour="name": a
   // dimmed page with a cutout around it and a card next to it. The card is a modal dialog
   // (WAI-ARIA APG): the rest of the page is inert, Tab stays in the card, Esc skips, Left
   // and Right go back and forth, and focus returns where it was. The cutout and the card
@@ -749,6 +1273,7 @@
     let card;
     let spot;
     let parts;
+    let allSteps = [];
     let steps = [];
     let index = 0;
     let opened = false;
@@ -775,7 +1300,8 @@
         back: root.querySelector('[data-tour-action="back"]'),
         next: root.querySelector('[data-tour-action="next"]'),
       };
-      steps = Array.from(root.querySelectorAll(".tour-steps > li"));
+      allSteps = Array.from(root.querySelectorAll(".tour-steps > li"));
+      steps = allSteps;
       return steps.length > 0;
     }
 
@@ -1013,6 +1539,8 @@
       if (document.querySelector("dialog[open]")) return false;
       window.clearTimeout(closeTimer);
       openCombos.forEach((close) => close());
+      // A step marked data-optional is left out while its target is not on the page.
+      steps = allSteps.filter((step) => !("optional" in step.dataset) || shown(hook(step.dataset.target)));
       opened = true;
       returnTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       // Everything but the tips is inert: no focus, no clicks, hidden from screen readers.
@@ -1120,6 +1648,7 @@
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll("textarea.inline").forEach(fit);
     enhanceSelects(document);
+    recorder.init();
     // Arrived through the "Search" link or the "/" key from another page.
     if (window.location.hash === "#search") {
       byId("q")?.focus();
