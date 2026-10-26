@@ -70,6 +70,26 @@ On first launch the app shows a few tips. **Help → Show Tips** brings them bac
 
 **Удаление.** Если включено **Открывать при входе**, выключите его. Завершите приложение и перетащите его из папки «Программы» в Корзину. Чтобы удалить встречи и модели, удалите обе папки выше (Finder → Переход → Переход к папке…).
 
+## Record a meeting
+
+You can record a call right in the app instead of looking for a file. On the **Add recording** page, open the **Record a meeting** block, pick **All system audio** or a single app (Zoom, a browser and so on), switch your microphone on if you want to be in the transcript, and press **Start recording**. When you press **Stop**, the recording goes straight into the queue.
+
+- **Permissions.** macOS asks for **Microphone** and **System Audio Recording** (System Settings → Privacy & Security). Screen recording is not needed. Nothing is recorded until you press Start recording.
+- **Your voice.** With the microphone on, you appear in the transcript as a separate speaker, **Me**. Use headphones: the app does not cancel echo, so a speaker in the room is picked up twice.
+- **Keeping the audio.** By default the recording is deleted after it is transcribed. Turn on **Save recording after processing** to keep it as a small `.m4a` next to the transcript. It is deleted together with the meeting, and you can download it from the meeting page.
+- **Limits.** A recording is capped at 12 hours. A single browser tab cannot be recorded on its own, only the whole browser.
+- **After an update.** Because the app is not signed with a paid certificate, macOS may ask for System Audio Recording again after each update.
+
+### Запись встречи
+
+Звонок можно записать прямо в приложении. На странице **Добавить запись** в блоке **Запись встречи** выберите **Весь системный звук** или одно приложение (Zoom, браузер и так далее), включите микрофон, если хотите попасть в расшифровку, и нажмите **Начать запись**. После **Остановить** запись сама попадает в очередь.
+
+- **Разрешения.** macOS запросит **Микрофон** и **Запись системного звука** (Системные настройки → Конфиденциальность и безопасность). Запись экрана не нужна. Пока вы не нажали «Начать запись», ничего не пишется.
+- **Ваш голос.** С включённым микрофоном вы попадёте в расшифровку отдельным говорящим, **Я**. Лучше использовать наушники: эхо приложение не подавляет, и колонки в комнате записываются дважды.
+- **Сохранить звук.** По умолчанию запись удаляется после расшифровки. Включите **Сохранить запись после обработки**, и звук останется рядом с расшифровкой в небольшом файле `.m4a`. Он удаляется вместе со встречей, а скачать его можно на странице встречи.
+- **Ограничения.** Одна запись длится не дольше 12 часов. Отдельную вкладку браузера записать нельзя, только браузер целиком.
+- **После обновления.** Приложение пока подписано без платного сертификата, поэтому после каждого обновления macOS может снова спросить разрешение на запись системного звука.
+
 ## Languages
 
 LocTranscriptor was built for and tested mainly on **Russian** meetings. **English** works too. You pick the language for each recording, and the interface is available in English and Russian. The underlying model (Parakeet TDT 0.6B v3) covers 25 European languages, but only Russian and English are tested.
