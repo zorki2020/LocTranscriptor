@@ -1309,6 +1309,17 @@
     let speed = 0;
     let lastScroll = 0;
     let context = null;
+    let frame = 0;
+    // What the word highlight shows now, to touch the page only when it changes.
+    let shown = { segment: null, index: -2 };
+    // The word the reader clicked: marked from the click on, until its own time comes,
+    // although playback starts a moment before it.
+    let clicked = null;
+    let hovered = null;
+    // Words are marked with the CSS Custom Highlight API: ranges over the text, no extra
+    // elements, so copying and search work as before. Without it only paragraphs light up.
+    const marks = window.CSS && CSS.highlights && window.Highlight ? CSS.highlights : null;
+    const models = new WeakMap();
 
     const pad = (n) => String(n).padStart(2, "0");
     function clock(seconds, long) {
@@ -1336,6 +1347,113 @@
       ui.toggle.setAttribute("aria-label", playing ? ui.root.dataset.pause : ui.root.dataset.play);
     }
 
+    // The words of a paragraph: where each one sits in the text and when it begins. The
+    // times come from the transcript; for meetings made before word times were kept, they
+    // are spread over the paragraph by the length of the text.
+    function wordsOf(el) {
+      if (models.has(el)) return models.get(el);
+      const text = el.querySelector(".seg-text");
+      const node = text ? Array.from(text.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && n.data.trim()) : null;
+      let model = null;
+      if (node) {
+        const spans = [];
+        const pattern = /\S+/g;
+        let match;
+        while ((match = pattern.exec(node.data)) !== null) spans.push({ from: match.index, to: match.index + match[0].length });
+        const start = Number(el.dataset.start);
+        const end = Number(el.dataset.end);
+        const known = el.dataset.words ? el.dataset.words.split(",").map(Number) : [];
+        const exact = known.length === spans.length && known.every(Number.isFinite);
+        const length = node.data.length || 1;
+        const times = exact ? known : spans.map((span) => start + (span.from / length) * Math.max(0, end - start));
+        model = { node: node, spans: spans, times: times, exact: exact };
+      }
+      models.set(el, model);
+      return model;
+    }
+
+    // The word under the pointer: `{el, model, index}`, or null away from the words.
+    function wordAt(event) {
+      const el = event.target instanceof Element ? event.target.closest(".seg") : null;
+      const text = el && el.querySelector(".seg-text");
+      if (!text || !text.contains(event.target)) return null;
+      const model = wordsOf(el);
+      const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(event.clientX, event.clientY) : null;
+      if (!model || !caret || caret.startContainer !== model.node) return null;
+      const offset = caret.startOffset;
+      let index = model.spans.findIndex((span) => offset <= span.to);
+      if (index < 0) index = model.spans.length - 1;
+      return index < 0 ? null : { el: el, model: model, index: index };
+    }
+
+    function rangeOf(model, from, to) {
+      const range = new Range();
+      range.setStart(model.node, from);
+      range.setEnd(model.node, to);
+      return range;
+    }
+
+    // Where marks overlap, the word being said wins over the pointer, and both over the
+    // dimmed rest of the paragraph.
+    const PRIORITY = { "tb-word": 2, "tb-hover": 1, "tb-ahead": 0 };
+    function setMark(name, range) {
+      if (!marks) return;
+      if (!range) {
+        marks.delete(name);
+        return;
+      }
+      const mark = new Highlight(range);
+      mark.priority = PRIORITY[name] || 0;
+      marks.set(name, mark);
+    }
+
+    // Subtitle-like marking inside the paragraph being spoken: the current word stands
+    // out, the words still to come are dimmed.
+    function showWord(time) {
+      const model = active && marks ? wordsOf(active.el) : null;
+      let index = -1;
+      if (model && model.spans.length) {
+        if (time >= active.end + 0.3) {
+          index = model.spans.length;
+        } else if (clicked && clicked.el === active.el && time < model.times[clicked.index]) {
+          index = clicked.index;
+        } else {
+          clicked = null;
+          // A word is shown a moment early, as the click starts a moment before it.
+          const ahead = model.exact ? WORD_LEAD_S : 0.05;
+          for (let i = model.spans.length - 1; i >= 0; i -= 1) {
+            if (model.times[i] <= time + ahead) {
+              index = i;
+              break;
+            }
+          }
+        }
+      }
+      if (shown.segment === active && shown.index === index) return;
+      shown = { segment: active, index: index };
+      if (!model || !model.spans.length) {
+        setMark("tb-word", null);
+        setMark("tb-ahead", null);
+        return;
+      }
+      const spans = model.spans;
+      setMark("tb-word", index >= 0 && index < spans.length ? rangeOf(model, spans[index].from, spans[index].to) : null);
+      const next = Math.max(0, index + 1);
+      setMark("tb-ahead", next < spans.length ? rangeOf(model, spans[next].from, model.node.data.length) : null);
+    }
+
+    function tick() {
+      frame = 0;
+      if (!audio || audio.paused || audio.seeking || pendingTime !== null || dragging) return;
+      follow(audio.currentTime);
+      showWord(audio.currentTime);
+      frame = window.requestAnimationFrame(tick);
+    }
+
+    function startTicking() {
+      if (!frame) frame = window.requestAnimationFrame(tick);
+    }
+
     function fail() {
       if (audio) audio.pause();
       ui.root.classList.add("is-broken");
@@ -1344,6 +1462,8 @@
       ui.msg.hidden = false;
       ui.root.closest(".transcript")?.classList.remove("can-play");
       highlight(null);
+      showWord(0);
+      markHover(null, -1);
     }
 
     // A recording made with the microphone keeps the two sides on separate channels:
@@ -1389,6 +1509,10 @@
       audio.addEventListener("play", function () {
         setPlaying(true);
         reveal();
+        startTicking();
+      });
+      audio.addEventListener("seeked", function () {
+        if (!audio.paused) startTicking();
       });
       audio.addEventListener("pause", () => setPlaying(false));
       audio.addEventListener("ended", () => setPlaying(false));
@@ -1416,6 +1540,7 @@
       }
       paint(target);
       follow(target);
+      showWord(target);
       if (thenPlay) play();
     }
 
@@ -1478,31 +1603,47 @@
       active.el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
     }
 
-    // Time of a click inside a paragraph. Only paragraphs have times, so the place inside
-    // one is estimated from how far into its text the clicked word begins.
+    // Time of a click inside a paragraph: the time of the clicked word, a moment early so
+    // its beginning is not cut off. Beside the words (the margin, the end of a short line)
+    // the paragraph plays from its start.
     function timeOfClick(event, el) {
       const start = Number(el.dataset.start);
-      const end = Number(el.dataset.end);
       if (!Number.isFinite(start)) return null;
-      const text = el.querySelector(".seg-text");
-      // Beside the text (the margin, the end of a short line) there is no word to aim at.
-      if (!text || !text.contains(event.target)) return start;
-      const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(event.clientX, event.clientY) : null;
-      const node = caret && caret.startContainer;
-      if (!text || !node || node.nodeType !== Node.TEXT_NODE || node.parentNode !== text || !(end > start)) {
-        return start;
-      }
-      const words = node.data;
-      let offset = Math.min(caret.startOffset, words.length);
-      while (offset > 0 && !/\s/.test(words[offset - 1])) offset -= 1;
-      // The exact time of the word, when the transcript has one for each of its words.
-      const known = el.dataset.words ? el.dataset.words.split(",").map(Number) : [];
-      const index = words.slice(0, offset).split(/\s+/).filter(Boolean).length;
-      if (known.length === words.split(/\s+/).filter(Boolean).length && Number.isFinite(known[index])) {
-        return Math.max(start, known[index] - WORD_LEAD_S);
-      }
-      const share = words.trim().length > 0 ? offset / words.length : 0;
-      return Math.max(start, start + share * (end - start) - LEAD_S);
+      const word = wordAt(event);
+      clicked = word && word.el === el ? { el: el, index: word.index } : null;
+      if (!word || word.el !== el) return start;
+      const lead = word.model.exact ? WORD_LEAD_S : LEAD_S;
+      return Math.max(start, word.model.times[word.index] - lead);
+    }
+
+    // Marks the word a click would play from, so the place is clear before clicking.
+    let hoverFrame = 0;
+    let hoverEvent = null;
+    function hover(event) {
+      hoverEvent = event;
+      if (hoverFrame) return;
+      hoverFrame = window.requestAnimationFrame(function () {
+        hoverFrame = 0;
+        const target = hoverEvent;
+        if (!target || ui.root.classList.contains("is-broken")) return markHover(null, -1);
+        const word = wordAt(target);
+        const stamp = target.target instanceof Element ? target.target.closest(".seg a.ts") : null;
+        if (word) {
+          markHover(word.model, word.index);
+        } else if (stamp) {
+          // The timestamp plays from the first word.
+          markHover(wordsOf(stamp.closest(".seg")), 0);
+        } else {
+          markHover(null, -1);
+        }
+      });
+    }
+
+    function markHover(model, index) {
+      const span = model && model.spans[index];
+      if (hovered && span && hovered.model === model && hovered.index === index) return;
+      hovered = span ? { model: model, index: index } : null;
+      setMark("tb-hover", span ? rangeOf(model, span.from, span.to) : null);
     }
 
     // Where Space already means something. The seek bar keeps focus after a drag and
@@ -1540,10 +1681,25 @@
         ui.now.textContent = clock(time, ui.long);
         ui.seek.style.setProperty("--played", (total() > 0 ? (time / total()) * 100 : 0).toFixed(2) + "%");
       });
+      const transcript = root.closest(".transcript");
+      if (marks && window.matchMedia("(hover: hover)").matches) {
+        transcript.addEventListener("mousemove", hover);
+        transcript.addEventListener("mouseleave", function () {
+          hoverEvent = null;
+          markHover(null, -1);
+        });
+        // The text moves under a resting pointer (the page follows the audio): the mark
+        // would point at a word a click no longer hits.
+        window.addEventListener("scroll", function () {
+          hoverEvent = null;
+          markHover(null, -1);
+        }, { passive: true });
+      }
       ui.seek.addEventListener("change", function () {
         dragging = false;
         lastScroll = 0;
         pinned = null;
+        clicked = null;
         seek(Number(ui.seek.value), false);
         if (audio && !audio.paused) reveal();
       });
@@ -1553,8 +1709,12 @@
         if (!el) return;
         // Selecting text to copy is not a request to play.
         const selection = window.getSelection();
-        if ((selection && !selection.isCollapsed) || event.detail > 1) return;
+        if ((selection && !selection.isCollapsed) || event.detail > 1) {
+          markHover(null, -1);
+          return;
+        }
         const stamp = event.target.closest("a.ts");
+        if (stamp) clicked = { el: el, index: 0 };
         const time = stamp ? Number(el.dataset.start) : timeOfClick(event, el);
         if (time === null || !Number.isFinite(time)) return;
         lastScroll = Date.now();

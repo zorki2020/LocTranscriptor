@@ -50,6 +50,10 @@
   --warn: var(--amber-11);
   --warn-tint: var(--amber-3);
   --mark-bg: var(--amber-4);
+  /* Words in the transcript while listening: the one being said, the one under the pointer. */
+  --word-bg: var(--indigo-a5);
+  --word-text: var(--indigo-12);
+  --word-hover: var(--sand-a5);
   --overlay: rgb(20 20 18 / 0.28);
 
   --shadow-xs: 0 1px 2px rgb(30 25 15 / 0.05);
@@ -95,6 +99,8 @@
     --surface-raised: var(--sand-3);
     --focus: var(--indigo-10);
     --mark-bg: var(--amber-5);
+    --word-bg: var(--indigo-a6);
+    --word-hover: var(--sand-a6);
     --overlay: rgb(0 0 0 / 0.55);
     --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.3);
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 8px -2px rgb(0 0 0 / 0.4);
@@ -1535,6 +1541,11 @@ progress::-moz-progress-bar { border-radius: var(--r-full); background: var(--ac
 /* With a player the text is a control: a click plays the recording from that place. */
 .can-play .seg-text { cursor: pointer; }
 .seg.is-playing { background: var(--accent-tint); }
+
+/* Ranges set by the script (CSS Custom Highlight API): no markup is added to the text. */
+::highlight(tb-word) { background-color: var(--word-bg); color: var(--word-text); }
+::highlight(tb-ahead) { color: var(--text-3); }
+::highlight(tb-hover) { background-color: var(--word-hover); }
 .seg.is-playing .ts { color: var(--accent-text); }
 
 /* Stays at the bottom of the window while the transcript is on screen. */

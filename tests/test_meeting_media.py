@@ -304,10 +304,24 @@ def test_app_js_player_smoke() -> None:
         "createMediaElementSource",
         "selection.isCollapsed",
         "player.init();",
+        "CSS.highlights",
+        'setMark("tb-word"',
+        'setMark("tb-ahead"',
+        'setMark("tb-hover"',
+        "requestAnimationFrame(tick)",
     ):
         assert marker in script, marker
     css = (root / "app.css").read_text(encoding="utf-8")
-    for selector in (".player {", ".player-seek {", ".seg.is-playing {", ".i-play {", ".i-pause {"):
+    for selector in (
+        ".player {",
+        ".player-seek {",
+        ".seg.is-playing {",
+        ".i-play {",
+        ".i-pause {",
+        "::highlight(tb-word)",
+        "::highlight(tb-ahead)",
+        "::highlight(tb-hover)",
+    ):
         assert selector in css, selector
     for icon in ("play.svg", "pause.svg"):
         assert (root / "icons" / icon).read_text(encoding="utf-8").startswith("<svg ")
