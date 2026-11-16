@@ -1311,14 +1311,11 @@
     let context = null;
     let frame = 0;
     // What the word highlight shows now, to touch the page only when it changes.
-    let shown = { segment: null, index: -2 };
+    let shown = { segment: null, index: -2, word: null };
     // The word the reader clicked: marked from the click on, until its own time comes,
     // although playback starts a moment before it.
     let clicked = null;
     let hovered = null;
-    // Words are marked with the CSS Custom Highlight API: ranges over the text, no extra
-    // elements, so copying and search work as before. Without it only paragraphs light up.
-    const marks = window.CSS && CSS.highlights && window.Highlight ? CSS.highlights : null;
     const models = new WeakMap();
 
     const pad = (n) => String(n).padStart(2, "0");
@@ -1347,26 +1344,43 @@
       ui.toggle.setAttribute("aria-label", playing ? ui.root.dataset.pause : ui.root.dataset.play);
     }
 
-    // The words of a paragraph: where each one sits in the text and when it begins. The
-    // times come from the transcript; for meetings made before word times were kept, they
-    // are spread over the paragraph by the length of the text.
+    // The words of a paragraph and when each one begins. The first time a paragraph is
+    // needed its text is split into one element per word (the text itself, spaces and
+    // copying stay the same), so a word can be marked and pointed at directly. The times
+    // come from the transcript; for meetings made before word times were kept, they are
+    // spread over the paragraph by the length of the text.
     function wordsOf(el) {
       if (models.has(el)) return models.get(el);
       const text = el.querySelector(".seg-text");
       const node = text ? Array.from(text.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && n.data.trim()) : null;
       let model = null;
       if (node) {
-        const spans = [];
+        const data = node.data;
+        const words = [];
+        const offsets = [];
+        const piece = document.createDocumentFragment();
         const pattern = /\S+/g;
+        let last = 0;
         let match;
-        while ((match = pattern.exec(node.data)) !== null) spans.push({ from: match.index, to: match.index + match[0].length });
+        while ((match = pattern.exec(data)) !== null) {
+          if (match.index > last) piece.append(data.slice(last, match.index));
+          const word = document.createElement("span");
+          word.className = "w";
+          word.textContent = match[0];
+          piece.append(word);
+          words.push(word);
+          offsets.push(match.index);
+          last = match.index + match[0].length;
+        }
+        if (last < data.length) piece.append(data.slice(last));
+        node.replaceWith(piece);
         const start = Number(el.dataset.start);
         const end = Number(el.dataset.end);
         const known = el.dataset.words ? el.dataset.words.split(",").map(Number) : [];
-        const exact = known.length === spans.length && known.every(Number.isFinite);
-        const length = node.data.length || 1;
-        const times = exact ? known : spans.map((span) => start + (span.from / length) * Math.max(0, end - start));
-        model = { node: node, spans: spans, times: times, exact: exact };
+        const exact = known.length === words.length && known.every(Number.isFinite);
+        const length = data.length || 1;
+        const times = exact ? known : offsets.map((offset) => start + (offset / length) * Math.max(0, end - start));
+        model = { words: words, times: times, exact: exact };
       }
       models.set(el, model);
       return model;
@@ -1378,50 +1392,31 @@
       const text = el && el.querySelector(".seg-text");
       if (!text || !text.contains(event.target)) return null;
       const model = wordsOf(el);
-      const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(event.clientX, event.clientY) : null;
-      if (!model || !caret || caret.startContainer !== model.node) return null;
-      const offset = caret.startOffset;
-      let index = model.spans.findIndex((span) => offset <= span.to);
-      if (index < 0) index = model.spans.length - 1;
+      if (!model) return null;
+      // Right after the split the event still names the old text: look again by position.
+      let word = event.target.closest(".w");
+      if (!word) {
+        const hit = document.elementFromPoint(event.clientX, event.clientY);
+        word = hit ? hit.closest(".w") : null;
+      }
+      const index = word ? model.words.indexOf(word) : -1;
       return index < 0 ? null : { el: el, model: model, index: index };
     }
 
-    function rangeOf(model, from, to) {
-      const range = new Range();
-      range.setStart(model.node, from);
-      range.setEnd(model.node, to);
-      return range;
-    }
-
-    // Where marks overlap, the word being said wins over the pointer, and both over the
-    // dimmed rest of the paragraph.
-    const PRIORITY = { "tb-word": 2, "tb-hover": 1, "tb-ahead": 0 };
-    function setMark(name, range) {
-      if (!marks) return;
-      if (!range) {
-        marks.delete(name);
-        return;
-      }
-      const mark = new Highlight(range);
-      mark.priority = PRIORITY[name] || 0;
-      marks.set(name, mark);
-    }
-
-    // Subtitle-like marking inside the paragraph being spoken: the current word stands
-    // out, the words still to come are dimmed.
+    // Subtitle-like marking inside the paragraph being spoken: only the current word.
     function showWord(time) {
-      const model = active && marks ? wordsOf(active.el) : null;
+      const model = active ? wordsOf(active.el) : null;
       let index = -1;
-      if (model && model.spans.length) {
+      if (model && model.words.length) {
         if (time >= active.end + 0.3) {
-          index = model.spans.length;
+          index = model.words.length;
         } else if (clicked && clicked.el === active.el && time < model.times[clicked.index]) {
           index = clicked.index;
         } else {
           clicked = null;
           // A word is shown a moment early, as the click starts a moment before it.
           const ahead = model.exact ? WORD_LEAD_S : 0.05;
-          for (let i = model.spans.length - 1; i >= 0; i -= 1) {
+          for (let i = model.words.length - 1; i >= 0; i -= 1) {
             if (model.times[i] <= time + ahead) {
               index = i;
               break;
@@ -1430,16 +1425,10 @@
         }
       }
       if (shown.segment === active && shown.index === index) return;
-      shown = { segment: active, index: index };
-      if (!model || !model.spans.length) {
-        setMark("tb-word", null);
-        setMark("tb-ahead", null);
-        return;
-      }
-      const spans = model.spans;
-      setMark("tb-word", index >= 0 && index < spans.length ? rangeOf(model, spans[index].from, spans[index].to) : null);
-      const next = Math.max(0, index + 1);
-      setMark("tb-ahead", next < spans.length ? rangeOf(model, spans[next].from, model.node.data.length) : null);
+      const word = model && index >= 0 ? model.words[index] || null : null;
+      if (shown.word) shown.word.classList.remove("is-word");
+      if (word) word.classList.add("is-word");
+      shown = { segment: active, index: index, word: word };
     }
 
     function tick() {
@@ -1640,10 +1629,11 @@
     }
 
     function markHover(model, index) {
-      const span = model && model.spans[index];
-      if (hovered && span && hovered.model === model && hovered.index === index) return;
-      hovered = span ? { model: model, index: index } : null;
-      setMark("tb-hover", span ? rangeOf(model, span.from, span.to) : null);
+      const word = (model && model.words[index]) || null;
+      if (word === hovered) return;
+      if (hovered) hovered.classList.remove("is-hover");
+      hovered = word;
+      if (word) word.classList.add("is-hover");
     }
 
     // Where Space already means something. The seek bar keeps focus after a drag and
@@ -1682,7 +1672,7 @@
         ui.seek.style.setProperty("--played", (total() > 0 ? (time / total()) * 100 : 0).toFixed(2) + "%");
       });
       const transcript = root.closest(".transcript");
-      if (marks && window.matchMedia("(hover: hover)").matches) {
+      if (window.matchMedia("(hover: hover)").matches) {
         transcript.addEventListener("mousemove", hover);
         transcript.addEventListener("mouseleave", function () {
           hoverEvent = null;
@@ -1714,7 +1704,11 @@
           return;
         }
         const stamp = event.target.closest("a.ts");
-        if (stamp) clicked = { el: el, index: 0 };
+        if (stamp) {
+          // Plays instead of jumping to the anchor: the jump would flash the whole paragraph.
+          event.preventDefault();
+          clicked = { el: el, index: 0 };
+        }
         const time = stamp ? Number(el.dataset.start) : timeOfClick(event, el);
         if (time === null || !Number.isFinite(time)) return;
         lastScroll = Date.now();

@@ -299,15 +299,14 @@ def test_app_js_player_smoke() -> None:
     for marker in (
         'byId("player")',
         "ui.root.dataset.src",
-        "caretRangeFromPoint",
+        "elementFromPoint",
         'audio.preload = "metadata"',
         "createMediaElementSource",
         "selection.isCollapsed",
         "player.init();",
-        "CSS.highlights",
-        'setMark("tb-word"',
-        'setMark("tb-ahead"',
-        'setMark("tb-hover"',
+        'word.className = "w"',
+        'classList.add("is-word")',
+        'classList.add("is-hover")',
         "requestAnimationFrame(tick)",
     ):
         assert marker in script, marker
@@ -315,12 +314,11 @@ def test_app_js_player_smoke() -> None:
     for selector in (
         ".player {",
         ".player-seek {",
-        ".seg.is-playing {",
+        ".seg.is-playing .ts {",
         ".i-play {",
         ".i-pause {",
-        "::highlight(tb-word)",
-        "::highlight(tb-ahead)",
-        "::highlight(tb-hover)",
+        ".w.is-word {",
+        ".w.is-hover {",
     ):
         assert selector in css, selector
     for icon in ("play.svg", "pause.svg"):

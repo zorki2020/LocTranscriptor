@@ -1540,13 +1540,19 @@ progress::-moz-progress-bar { border-radius: var(--r-full); background: var(--ac
 
 /* With a player the text is a control: a click plays the recording from that place. */
 .can-play .seg-text { cursor: pointer; }
-.seg.is-playing { background: var(--accent-tint); }
-
-/* Ranges set by the script (CSS Custom Highlight API): no markup is added to the text. */
-::highlight(tb-word) { background-color: var(--word-bg); color: var(--word-text); }
-::highlight(tb-ahead) { color: var(--text-3); }
-::highlight(tb-hover) { background-color: var(--word-hover); }
+/* With a player only words are marked, the paragraph keeps its look. */
+.can-play .seg:hover { background: transparent; }
 .seg.is-playing .ts { color: var(--accent-text); }
+
+/* One element per word, made by the script when a paragraph is first needed. The shadow
+   pads the mark without moving the text. */
+.w {
+  border-radius: var(--r-xs);
+  transition: background-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+
+.w.is-hover { background: var(--word-hover); box-shadow: 0 0 0 2px var(--word-hover); }
+.w.is-word { background: var(--word-bg); box-shadow: 0 0 0 2px var(--word-bg); color: var(--word-text); }
 
 /* Stays at the bottom of the window while the transcript is on screen. */
 .player {
@@ -2020,6 +2026,6 @@ progress::-moz-progress-bar { border-radius: var(--r-full); background: var(--ac
   .seg:target { animation: none; background: var(--accent-tint); }
   .drop.is-dragover, .drop.is-dragover .drop-icon { transform: none; }
   .rec-meter-fill, .switch, .switch::after { transition: none; }
-  .player-toggle, .player-seek::-webkit-slider-thumb { transition: none; }
+  .player-toggle, .player-seek::-webkit-slider-thumb, .w { transition: none; }
   .tour-card.is-changing :is(.tour-content, .tour-count) { opacity: 1; translate: none; }
 }
