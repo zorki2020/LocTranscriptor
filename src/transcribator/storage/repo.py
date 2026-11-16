@@ -247,10 +247,19 @@ def complete(
         conn.execute("DELETE FROM segment WHERE meeting_id = ?", (job.meeting_id,))
         conn.executemany(
             "INSERT INTO segment"
-            " (meeting_id, idx, start_s, end_s, speaker_label, text, search_text)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " (meeting_id, idx, start_s, end_s, speaker_label, text, search_text, word_starts)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                (job.meeting_id, idx, s.start, s.end, s.speaker, s.text, search_form(s.text))
+                (
+                    job.meeting_id,
+                    idx,
+                    s.start,
+                    s.end,
+                    s.speaker,
+                    s.text,
+                    search_form(s.text),
+                    _pack_word_starts(s),
+                )
                 for idx, s in enumerate(transcript.segments)
             ],
         )
@@ -373,14 +382,37 @@ def queue(conn: sqlite3.Connection, *, limit: int = 20) -> list[MeetingSummary]:
     return [_row_summary(row) for row in rows]
 
 
+def _pack_word_starts(segment: Segment) -> str | None:
+    """Word times for storage, or None when they do not match the words of the text."""
+    if not segment.word_starts or len(segment.word_starts) != len(segment.text.split()):
+        return None
+    return json.dumps([round(t, 2) for t in segment.word_starts], separators=(",", ":"))
+
+
+def _unpack_word_starts(stored: str | None) -> tuple[float, ...]:
+    if not stored:
+        return ()
+    try:
+        values = json.loads(stored)
+        return tuple(float(v) for v in values)
+    except (ValueError, TypeError):
+        return ()
+
+
 def get_meeting(conn: sqlite3.Connection, meeting_id: int) -> Meeting | None:
     row = conn.execute("SELECT * FROM meeting WHERE id = ?", (meeting_id,)).fetchone()
     if row is None:
         return None
     segments = [
-        Segment(float(s["start_s"]), float(s["end_s"]), str(s["speaker_label"]), str(s["text"]))
+        Segment(
+            float(s["start_s"]),
+            float(s["end_s"]),
+            str(s["speaker_label"]),
+            str(s["text"]),
+            _unpack_word_starts(s["word_starts"]),
+        )
         for s in conn.execute(
-            "SELECT start_s, end_s, speaker_label, text FROM segment"
+            "SELECT start_s, end_s, speaker_label, text, word_starts FROM segment"
             " WHERE meeting_id = ? ORDER BY idx",
             (meeting_id,),
         )

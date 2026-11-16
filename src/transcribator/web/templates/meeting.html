@@ -58,7 +58,7 @@
   {% for chunk in segments|batch(40) %}
   <div class="chunk">
     {% for row in chunk %}
-    <p class="seg{% if row.turn %} turn{% endif %}" id="seg-{{ row.idx }}" data-start="{{ "%.2f"|format(row.segment.start) }}" data-end="{{ "%.2f"|format(row.segment.end) }}"><a class="ts num" href="#seg-{{ row.idx }}">{{ row.segment.start|clock(long) }}</a><span class="seg-text"><span class="spk {{ row.spk }}">{{ row.speaker }}<span class="visually-hidden">:</span></span> {{ row.segment.text }}</span></p>
+    <p class="seg{% if row.turn %} turn{% endif %}" id="seg-{{ row.idx }}" data-start="{{ "%.2f"|format(row.segment.start) }}" data-end="{{ "%.2f"|format(row.segment.end) }}"{% if row.segment.word_starts %} data-words="{{ row.segment.word_starts|join(",") }}"{% endif %}><a class="ts num" href="#seg-{{ row.idx }}">{{ row.segment.start|clock(long) }}</a><span class="seg-text"><span class="spk {{ row.spk }}">{{ row.speaker }}<span class="visually-hidden">:</span></span> {{ row.segment.text }}</span></p>
     {% endfor %}
   </div>
   {% endfor %}

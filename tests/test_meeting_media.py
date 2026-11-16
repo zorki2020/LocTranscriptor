@@ -311,3 +311,68 @@ def test_app_js_player_smoke() -> None:
         assert selector in css, selector
     for icon in ("play.svg", "pause.svg"):
         assert (root / "icons" / icon).read_text(encoding="utf-8").startswith("<svg ")
+
+
+# --- word times ----------------------------------------------------------------------------
+
+
+def test_word_times_follow_the_words_of_the_text() -> None:
+    from transcribator.models import Word
+    from transcribator.pipeline.merge import build_segments
+
+    words = [
+        Word(1.0, 1.2, "Hello"),
+        Word(1.2, 1.25, ","),
+        Word(1.5, 1.9, "two words"),
+        Word(2.0, 2.3, "end"),
+        Word(2.3, 2.35, "."),
+        Word(9.0, 9.4, "Next"),
+    ]
+    first, second = build_segments(words, ["S1"] * len(words))
+    assert first.text == "Hello, two words end."
+    assert first.word_starts == (1.0, 1.5, 1.5, 2.0)
+    assert len(first.word_starts) == len(first.text.split())
+    assert second.word_starts == (9.0,)
+
+
+def test_word_times_are_stored_and_reach_the_page(env: AppEnv, tmp_path: Path) -> None:
+    conn = db.connect(db_path(env.root))
+    try:
+        meeting_id = repo.enqueue(
+            conn,
+            title="t",
+            recorded_at=None,
+            source_kind="path",
+            source_ref=str(original(tmp_path)),
+        )
+        job = repo.claim_next(conn)
+        assert job is not None
+        transcript = Transcript(
+            segments=[
+                Segment(1.0, 3.0, "S1", "one two three", (1.0, 1.504, 2.25)),
+                # Times that do not match the words are not kept.
+                Segment(3.0, 4.0, "S1", "four five", (3.0,)),
+                Segment(4.0, 5.0, "S1", "six"),
+            ],
+            duration_s=5.0,
+        )
+        repo.complete(conn, job, transcript)
+        loaded = repo.get_meeting(conn, meeting_id)
+    finally:
+        conn.close()
+    assert loaded is not None
+    assert [s.word_starts for s in loaded.segments] == [(1.0, 1.5, 2.25), (), ()]
+    page = env.client.get(f"/meetings/{meeting_id}").text
+    assert 'id="seg-0" data-start="1.00" data-end="3.00" data-words="1.0,1.5,2.25">' in page
+    assert page.count("data-words=") == 1
+
+
+def test_word_times_survive_the_transcript_round_trip() -> None:
+    transcript = Transcript(
+        segments=[Segment(0.0, 1.0, "S1", "a b", (0.0, 0.5)), Segment(1.0, 2.0, "S2", "c")],
+        duration_s=2.0,
+    )
+    data = transcript.to_dict()
+    assert "word_starts" not in data["segments"][1]
+    again = Transcript.from_dict(data)
+    assert [s.word_starts for s in again.segments] == [(0.0, 0.5), ()]

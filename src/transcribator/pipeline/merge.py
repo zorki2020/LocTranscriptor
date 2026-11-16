@@ -90,13 +90,18 @@ def build_segments(
     `max_gap_s`, or when the utterance grows longer than `max_segment_s`."""
     segments: list[Segment] = []
     tokens: list[str] = []
+    # Start of every word that opens with a space in the joined text. A token with a space
+    # inside would break the one-to-one match with the words of the text, so it counts
+    # once for each of its parts.
+    starts: list[float] = []
     speaker = ""
     start = end = 0.0
 
     def flush() -> None:
         if tokens:
-            segments.append(Segment(start, end, speaker, _join(tokens)))
+            segments.append(Segment(start, end, speaker, _join(tokens), tuple(starts)))
             tokens.clear()
+            starts.clear()
 
     for word, word_speaker in zip(words, speakers, strict=True):
         text = word.text.strip()
@@ -117,6 +122,7 @@ def build_segments(
         if not tokens:
             speaker, start = word_speaker, word.start
         tokens.append(text)
+        starts.extend([word.start] * len(text.split()))
         end = max(end, word.end)
     flush()
     return segments

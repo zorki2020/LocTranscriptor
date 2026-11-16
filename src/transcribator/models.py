@@ -28,6 +28,10 @@ class Segment:
     end: float
     speaker: str
     text: str
+    # When each word of `text` begins, one entry per space-separated word. Empty when the
+    # times are not known (transcripts made before they were kept). Not part of equality:
+    # two utterances with the same words are the same utterance.
+    word_starts: tuple[float, ...] = field(default=(), compare=False)
 
 
 @dataclass(slots=True)
@@ -70,6 +74,7 @@ class Transcript:
             "duration_s": self.duration_s,
             "segments": [
                 {"start": s.start, "end": s.end, "speaker": s.speaker, "text": s.text}
+                | ({"word_starts": list(s.word_starts)} if s.word_starts else {})
                 for s in self.segments
             ],
         }
@@ -78,7 +83,13 @@ class Transcript:
     def from_dict(cls, data: dict[str, Any]) -> Transcript:
         return cls(
             segments=[
-                Segment(float(s["start"]), float(s["end"]), str(s["speaker"]), str(s["text"]))
+                Segment(
+                    float(s["start"]),
+                    float(s["end"]),
+                    str(s["speaker"]),
+                    str(s["text"]),
+                    tuple(float(t) for t in s.get("word_starts", ())),
+                )
                 for s in data["segments"]
             ],
             duration_s=float(data["duration_s"]),

@@ -1291,14 +1291,19 @@
   // made on the first play, so opening a meeting reads no audio.
   const player = (function () {
     const SPEEDS = [1, 1.25, 1.5, 2];
-    // A click lands a little before the word, so its beginning is not cut off.
+    // A click lands a little before the word, so its beginning is not cut off: more when
+    // the place is only estimated, less when the time of the word is known.
     const LEAD_S = 0.8;
+    const WORD_LEAD_S = 0.15;
     // After the reader scrolls by hand, the page stops following the audio for a while.
     const FOLLOW_PAUSE_MS = 4000;
     let ui = null;
     let audio = null;
     let segments = null;
     let active = null;
+    // The paragraph the reader clicked: it stays the highlighted one while its own time
+    // lasts, even if another voice starts meanwhile.
+    let pinned = null;
     let pendingTime = null;
     let dragging = false;
     let speed = 0;
@@ -1377,7 +1382,7 @@
         }
       });
       audio.addEventListener("timeupdate", function () {
-        if (pendingTime !== null || dragging) return;
+        if (pendingTime !== null || dragging || audio.seeking) return;
         paint(audio.currentTime);
         follow(audio.currentTime);
       });
@@ -1422,23 +1427,34 @@
       return segments;
     }
 
-    // The paragraph spoken at `time`: the last one that has started. Voices on two
-    // channels can overlap, so the end of a paragraph does not close it.
+    // The paragraph spoken at `time`. Voices overlap (two channels, people talking over
+    // each other), so several paragraphs can hold one moment. The clicked one wins, then
+    // the latest that has started and not yet ended.
+    // In a pause between paragraphs the last one spoken stays.
     function segmentAt(time) {
+      const holds = (segment) => segment && time >= segment.start - 0.05 && time < segment.end;
+      if (holds(pinned)) return pinned;
+      // Dropped only once its time has passed: just after a seek the player can still
+      // report the old position for a moment.
+      if (pinned && time >= pinned.end && !(audio && audio.seeking)) pinned = null;
       const list = loadSegments();
       let low = 0;
       let high = list.length - 1;
-      let found = null;
+      let last = -1;
       while (low <= high) {
         const mid = (low + high) >> 1;
         if (list[mid].start <= time + 0.05) {
-          found = list[mid];
+          last = mid;
           low = mid + 1;
         } else {
           high = mid - 1;
         }
       }
-      return found;
+      // Paragraphs are at most a minute long, so only a few before `last` can still run.
+      for (let i = last; i >= 0 && i > last - 12; i -= 1) {
+        if (holds(list[i])) return list[i];
+      }
+      return last >= 0 ? list[last] : null;
     }
 
     function highlight(segment) {
@@ -1479,6 +1495,12 @@
       const words = node.data;
       let offset = Math.min(caret.startOffset, words.length);
       while (offset > 0 && !/\s/.test(words[offset - 1])) offset -= 1;
+      // The exact time of the word, when the transcript has one for each of its words.
+      const known = el.dataset.words ? el.dataset.words.split(",").map(Number) : [];
+      const index = words.slice(0, offset).split(/\s+/).filter(Boolean).length;
+      if (known.length === words.split(/\s+/).filter(Boolean).length && Number.isFinite(known[index])) {
+        return Math.max(start, known[index] - WORD_LEAD_S);
+      }
       const share = words.trim().length > 0 ? offset / words.length : 0;
       return Math.max(start, start + share * (end - start) - LEAD_S);
     }
@@ -1521,6 +1543,7 @@
       ui.seek.addEventListener("change", function () {
         dragging = false;
         lastScroll = 0;
+        pinned = null;
         seek(Number(ui.seek.value), false);
         if (audio && !audio.paused) reveal();
       });
@@ -1535,6 +1558,7 @@
         const time = stamp ? Number(el.dataset.start) : timeOfClick(event, el);
         if (time === null || !Number.isFinite(time)) return;
         lastScroll = Date.now();
+        pinned = loadSegments().find((segment) => segment.el === el) || null;
         seek(time, true);
       });
       ["wheel", "touchmove", "keydown"].forEach(function (name) {

@@ -96,6 +96,12 @@ _MIGRATIONS: list[str] = [
     """
     ALTER TABLE meeting ADD COLUMN audio_ref TEXT;
     """,
+    # 5: when each word of a segment begins, as a JSON list of seconds from the start of
+    # the recording, one per space-separated word of `text`. NULL for transcripts made
+    # before the times were kept.
+    """
+    ALTER TABLE segment ADD COLUMN word_starts TEXT;
+    """,
 ]
 SCHEMA_VERSION = len(_MIGRATIONS)
 
