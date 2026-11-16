@@ -53,15 +53,26 @@
 {% endif %}
 
 {% if meeting.status == "done" %}
-<section class="transcript" aria-labelledby="transcript-title">
-  <h2 class="section-title" id="transcript-title">{{ t("transcript") }}</h2>
+<section class="transcript{% if can_play|default(false) %} can-play{% endif %}" aria-labelledby="transcript-title">
+  <h2 class="section-title" id="transcript-title">{{ t("transcript") }}{% if can_play|default(false) %} <span class="section-aside">{{ t("player_hint") }}</span>{% endif %}</h2>
   {% for chunk in segments|batch(40) %}
   <div class="chunk">
     {% for row in chunk %}
-    <p class="seg{% if row.turn %} turn{% endif %}" id="seg-{{ row.idx }}"><a class="ts num" href="#seg-{{ row.idx }}">{{ row.segment.start|clock(long) }}</a><span class="seg-text"><span class="spk {{ row.spk }}">{{ row.speaker }}<span class="visually-hidden">:</span></span> {{ row.segment.text }}</span></p>
+    <p class="seg{% if row.turn %} turn{% endif %}" id="seg-{{ row.idx }}" data-start="{{ "%.2f"|format(row.segment.start) }}" data-end="{{ "%.2f"|format(row.segment.end) }}"><a class="ts num" href="#seg-{{ row.idx }}">{{ row.segment.start|clock(long) }}</a><span class="seg-text"><span class="spk {{ row.spk }}">{{ row.speaker }}<span class="visually-hidden">:</span></span> {{ row.segment.text }}</span></p>
     {% endfor %}
   </div>
   {% endfor %}
+  {% if can_play|default(false) %}
+  {# The audio element is made by the script on the first play: no audio is read before. #}
+  <div class="player" id="player" role="group" aria-label="{{ t("player_label") }}" data-src="/meetings/{{ meeting.id }}/media"{% if play_mono|default(false) %} data-mono{% endif %} data-play="{{ t("player_play") }}" data-pause="{{ t("player_pause") }}" data-error="{{ t("player_error") }}">
+    <button type="button" class="player-toggle" id="player-toggle" aria-label="{{ t("player_play") }}"><span class="i i-play" aria-hidden="true"></span></button>
+    <span class="player-time num" id="player-now">{{ 0|clock(long) }}</span>
+    <input class="player-seek" id="player-seek" type="range" min="0" max="{{ "%.1f"|format(meeting.duration_s or 0) }}" step="0.1" value="0" aria-label="{{ t("player_seek") }}">
+    <span class="player-time num" id="player-total">{{ (meeting.duration_s or 0)|clock(long) }}</span>
+    <button type="button" class="player-speed num" id="player-speed" aria-label="{{ t("player_speed") }}">1×</button>
+    <p class="player-msg" id="player-msg" role="status" hidden></p>
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 </div>

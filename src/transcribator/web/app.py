@@ -65,7 +65,7 @@ from transcribator.pipeline.audio import AudioError, probe_duration
 from transcribator.pipeline.format_md import render_markdown, speaker_labels
 from transcribator.pipeline.merge import MIC_SPEAKER
 from transcribator.storage import db, repo
-from transcribator.web import display, queries, recordings
+from transcribator.web import display, media, queries, recordings
 from transcribator.web.picker import pick_file
 from transcribator.web.security import FORM_CONTENT_TYPE, FORM_LIMIT_BYTES, LocalOnlyMiddleware
 from transcribator.web.strings import language_name, plural, t
@@ -296,6 +296,41 @@ def create_app(
     def audio_root() -> Path:
         """The folder of kept audio. Not created here: reading must not make folders."""
         return data_root / "audio"
+
+    def open_playable(
+        meeting: repo.Meeting, source: tuple[str, str, str] | None
+    ) -> tuple[int, int, str, bool] | None:
+        """The audio the page can play for a finished meeting, as `(descriptor, size, media
+        type, two voices on separate channels)`: the kept audio of a recording, otherwise
+        the original at the path it was added from. None when there is nothing to play."""
+        if meeting.status != "done" or source is None:
+            return None
+        kind, ref, layout = source
+        kept = recordings.open_meeting_audio(audio_root(), meeting.audio_ref)
+        if kept is not None:
+            return kept[0], kept[1], "audio/mp4", layout == "mic_system"
+        if kind != "path":
+            return None
+        original = media.open_original(ref)
+        if original is None:
+            return None
+        kind_of_file = media.sniff(original[0])
+        if kind_of_file is None:
+            os.close(original[0])
+            return None
+        return original[0], original[1], kind_of_file, False
+
+    def playable(meeting: repo.Meeting, source: tuple[str, str, str] | None) -> tuple[bool, bool]:
+        """`(there is something to play, it has two voices on separate channels)` for the
+        meeting page. Same choice as `open_playable`, but the original is not touched at
+        all (it may sit on a slow or missing volume): whether it is still there and can be
+        played shows when it is actually played."""
+        if meeting.status != "done" or source is None:
+            return False, False
+        kind, _, layout = source
+        if recordings.has_audio(audio_root(), meeting.audio_ref):
+            return True, layout == "mic_system"
+        return kind == "path", False
 
     def check_id(meeting_id: int) -> None:
         if meeting_id > _MAX_ID:
@@ -754,6 +789,47 @@ def create_app(
             background=BackgroundTask(closer.close),
         )
 
+    @app.get("/meetings/{meeting_id:int}/media")
+    def meeting_media(meeting_id: int, request: Request) -> Response:
+        """The audio for the player in the meeting page, whole or one byte range (the
+        player seeks with ranges). Which file is played is decided only by what is stored
+        for the meeting; nothing in the request names a file."""
+        check_id(meeting_id)
+        # Only this service's own page plays the audio. Another site cannot read the
+        # answer anyway; this also keeps it from learning whether there is one.
+        if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+            raise StarletteHTTPException(404)
+        with open_db() as conn:
+            meeting = repo.get_meeting(conn, meeting_id)
+            source = queries.media_source(conn, meeting_id)
+        opened = None if meeting is None else open_playable(meeting, source)
+        if opened is None:
+            raise StarletteHTTPException(404)
+        fd, size, media_type, _ = opened
+        headers = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        try:
+            start, end = media.parse_range(request.headers.get("range"), size)
+        except ValueError:
+            os.close(fd)
+            headers["Content-Range"] = f"bytes */{size}"
+            return Response(status_code=416, headers=headers)
+        partial = "range" in request.headers
+        if partial:
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        headers["Content-Length"] = str(end - start + 1)
+        closer = _FdCloser(fd)
+        return StreamingResponse(
+            media.read_range(closer, start, end),
+            status_code=206 if partial else 200,
+            media_type=media_type,
+            headers=headers,
+            background=BackgroundTask(closer.close),
+        )
+
     @app.get("/meetings/{meeting_id:int}/status", response_class=HTMLResponse)
     def meeting_status(meeting_id: int) -> HTMLResponse:
         """Status block polled from the meeting page. On a final status htmx reloads the
@@ -776,8 +852,10 @@ def create_app(
             stage = queries.job_stage(conn, meeting_id)
             started = queries.stage_started(conn).get(meeting_id)
             language = queries.meeting_languages(conn, [meeting_id]).get(meeting_id)
+            source = queries.media_source(conn, meeting_id)
         if meeting is None:
             raise StarletteHTTPException(404)
+        can_play, play_mono = playable(meeting, source)
         labels = speaker_labels(meeting.transcript, meeting.names, lang=ui_lang())
         classes = display.speaker_classes([*labels, *meeting.labels])
         speakers = [
@@ -819,6 +897,8 @@ def create_app(
             language=language,
             long=(meeting.duration_s or 0) >= 3600,
             has_audio=recordings.has_audio(audio_root(), meeting.audio_ref),
+            can_play=can_play,
+            play_mono=play_mono,
             nav="list",
         )
 

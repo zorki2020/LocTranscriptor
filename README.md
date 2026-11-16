@@ -70,6 +70,18 @@ On first launch the app shows a few tips. **Help → Show Tips** brings them bac
 
 **Удаление.** Если включено **Открывать при входе**, выключите его. Завершите приложение и перетащите его из папки «Программы» в Корзину. Чтобы удалить встречи и модели, удалите обе папки выше (Finder → Переход → Переход к папке…).
 
+## Listen while you read
+
+Not sure who "Speaker 2" is? Click any place in the transcript and the recording plays from there, so you can hear the voice and give the speaker a name. The player at the bottom of the meeting page has pause, seeking and speed, and the paragraph being spoken is highlighted.
+
+The app plays the file you added, from where it is, so it works as long as that file has not been moved or deleted. For a meeting recorded in the app, turn on **Save recording after processing** to be able to listen later.
+
+### Слушать и читать
+
+Непонятно, кто такой «Спикер 2»? Нажмите на любое место в расшифровке, и запись заиграет с этого места: можно услышать голос и дать спикеру имя. Внизу страницы встречи есть проигрыватель с паузой, перемоткой и скоростью, а произносимый абзац подсвечивается.
+
+Приложение играет тот файл, который вы добавили, прямо с его места, поэтому звук есть, пока файл не перемещён и не удалён. Чтобы слушать встречу, записанную в приложении, включите **Сохранить запись после обработки**.
+
 ## Record a meeting
 
 You can record a call right in the app instead of looking for a file. On the **Add recording** page, open the **Record a meeting** block, pick **All system audio** or a single app (Zoom, a browser and so on), switch your microphone on if you want to be in the transcript, and press **Start recording**. When you press **Stop**, the recording goes straight into the queue.

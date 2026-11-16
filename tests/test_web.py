@@ -554,12 +554,17 @@ def test_meeting_page_format(env: Env) -> None:
     meeting_id = env.add_done()
     html = env.client.get(f"/meetings/{meeting_id}").text
     assert (
-        '<p class="seg turn" id="seg-0"><a class="ts num" href="#seg-0">00:00</a>'
+        '<p class="seg turn" id="seg-0" data-start="0.00" data-end="2.00">'
+        '<a class="ts num" href="#seg-0">00:00</a>'
         '<span class="seg-text"><span class="spk spk-1">Speaker 1'
         '<span class="visually-hidden">:</span></span>'
         " Привет, давайте обсудим Ёлку и миграцию.</span></p>" in html
     )
-    assert '<p class="seg turn" id="seg-2"><a class="ts num" href="#seg-2">00:04</a>' in html
+    assert re.search(
+        r'<p class="seg turn" id="seg-2" data-start="[\d.]+" data-end="[\d.]+">'
+        r'<a class="ts num" href="#seg-2">00:04</a>',
+        html,
+    )
     assert f'href="/meetings/{meeting_id}.md"' in html
     # Deletion is confirmed in its own dialog; the request goes through htmx with the token.
     assert '<dialog id="delete-dialog"' in html and "hx-confirm" not in html
@@ -567,7 +572,7 @@ def test_meeting_page_format(env: Env) -> None:
     assert '<button type="button" class="btn" data-close autofocus>Cancel</button>' in html
     # Recording language in the metadata, its name in the interface language.
     assert '<span title="Recording language">Russian</span>' in html
-    assert '<h2 class="section-title" id="transcript-title">Transcript</h2>' in html
+    assert '<h2 class="section-title" id="transcript-title">Transcript ' in html
 
 
 def test_no_summary_anywhere(env: Env) -> None:
@@ -632,7 +637,7 @@ def test_export_and_speakers_in_russian(env: Env, ru: None) -> None:
     html = env.client.get(f"/meetings/{meeting_id}").text
     assert html.count('<span class="spk spk-1">Спикер 1<') == 2
     assert '<span title="Язык записи">Русский</span>' in html
-    assert 'id="transcript-title">Транскрипт</h2>' in html
+    assert 'id="transcript-title">Транскрипт ' in html
     assert "2 спикера" in html
     search = env.client.get("/meetings", params={"q": "миграц"}).text
     assert '<span class="spk spk-2">Спикер 2</span>' in search

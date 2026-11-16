@@ -50,6 +50,16 @@ def meeting_languages(conn: sqlite3.Connection, meeting_ids: Iterable[int]) -> d
     return {int(row["id"]): str(row["language"]) for row in rows}
 
 
+def media_source(conn: sqlite3.Connection, meeting_id: int) -> tuple[str, str, str] | None:
+    """`(source_kind, source_ref, layout)` of a meeting: where its recording came from."""
+    row = conn.execute(
+        "SELECT source_kind, source_ref, layout FROM meeting WHERE id = ?", (meeting_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row["source_kind"]), str(row["source_ref"]), str(row["layout"])
+
+
 STATUSES = ("queued", "processing", "done", "error")
 
 

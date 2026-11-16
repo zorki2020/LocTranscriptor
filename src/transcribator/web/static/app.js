@@ -788,6 +788,41 @@
 
     const level = (value) => (Number.isFinite(value) ? Math.sqrt(Math.min(1, Math.max(0, value))) : 0);
     const isActive = () => ACTIVE.includes(state);
+
+    // The app reports a peak level about once a second. Showing it directly makes the bars jump,
+    // so the displayed value follows the target with a quick rise and a slow fall, one frame
+    // at a time.
+    const meters = { mic: 0, system: 0, targetMic: 0, targetSystem: 0, frame: 0, last: 0 };
+    function paintMeters() {
+      ui.fillMic.style.setProperty("--level", meters.mic.toFixed(3));
+      ui.fillSystem.style.setProperty("--level", meters.system.toFixed(3));
+    }
+    function stepMeters(now) {
+      const dt = Math.min(0.25, Math.max(0, (now - meters.last) / 1000));
+      meters.last = now;
+      const follow = (shown, target) => shown + (target - shown) * (1 - Math.exp(-dt / (target > shown ? 0.1 : 0.55)));
+      meters.mic = follow(meters.mic, meters.targetMic);
+      meters.system = follow(meters.system, meters.targetSystem);
+      paintMeters();
+      const settled = Math.abs(meters.mic - meters.targetMic) < 0.002 && Math.abs(meters.system - meters.targetSystem) < 0.002;
+      meters.frame = settled ? 0 : window.requestAnimationFrame(stepMeters);
+    }
+    function setMeters(mic, system) {
+      meters.targetMic = mic;
+      meters.targetSystem = system;
+      if (reducedMotion() || (mic === 0 && system === 0 && state !== "recording")) {
+        if (meters.frame) window.cancelAnimationFrame(meters.frame);
+        meters.frame = 0;
+        meters.mic = mic;
+        meters.system = system;
+        paintMeters();
+        return;
+      }
+      if (!meters.frame) {
+        meters.last = performance.now();
+        meters.frame = window.requestAnimationFrame(stepMeters);
+      }
+    }
     const appKey = (app) => "app:" + app.bundleIds.slice().sort().join(",");
 
     // The sentence for a code, with the System Settings pane that fixes it, if there is one.
@@ -961,8 +996,8 @@
       ui.sourceName.textContent = sourceLabel(next.source) + (mic ? " · " + texts.withMic : "");
       ui.meterMic.hidden = !mic;
       ui.meters.hidden = state === "starting";
-      ui.fillMic.style.setProperty("--level", String(level(next.level && next.level.mic)));
-      ui.fillSystem.style.setProperty("--level", String(level(next.level && next.level.system)));
+      setMeters(state === "recording" ? level(next.level && next.level.mic) : 0,
+        state === "recording" ? level(next.level && next.level.system) : 0);
       if (state === "recording" || state === "starting") clearResult();
       if (next.warning === "disk_low") sawDiskLow = true;
       renderNotice();
@@ -1248,6 +1283,273 @@
   // Defined before the first recording.status call, so a push from the app never finds
   // it missing. Pages without the block ignore the push.
   window.transcribatorRecorder = { onStatus: recorder.onStatus };
+
+  // --- player (meeting page) ----------------------------------------------------------
+
+  // Plays the meeting's audio and ties it to the transcript: a click on the text plays
+  // from that place, and the paragraph being spoken is highlighted. The audio element is
+  // made on the first play, so opening a meeting reads no audio.
+  const player = (function () {
+    const SPEEDS = [1, 1.25, 1.5, 2];
+    // A click lands a little before the word, so its beginning is not cut off.
+    const LEAD_S = 0.8;
+    // After the reader scrolls by hand, the page stops following the audio for a while.
+    const FOLLOW_PAUSE_MS = 4000;
+    let ui = null;
+    let audio = null;
+    let segments = null;
+    let active = null;
+    let pendingTime = null;
+    let dragging = false;
+    let speed = 0;
+    let lastScroll = 0;
+    let context = null;
+
+    const pad = (n) => String(n).padStart(2, "0");
+    function clock(seconds, long) {
+      const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+      const h = Math.floor(total / 3600);
+      const rest = total % 3600;
+      const tail = pad(Math.floor(rest / 60)) + ":" + pad(rest % 60);
+      return long || h > 0 ? h + ":" + tail : tail;
+    }
+
+    function total() {
+      return audio && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : Number(ui.seek.max) || 0;
+    }
+
+    function paint(time) {
+      if (dragging) return;
+      const all = total();
+      ui.now.textContent = clock(time, ui.long);
+      ui.seek.style.setProperty("--played", (all > 0 ? Math.min(100, (time / all) * 100) : 0).toFixed(2) + "%");
+      ui.seek.value = String(time);
+    }
+
+    function setPlaying(playing) {
+      ui.icon.className = "i " + (playing ? "i-pause" : "i-play");
+      ui.toggle.setAttribute("aria-label", playing ? ui.root.dataset.pause : ui.root.dataset.play);
+    }
+
+    function fail() {
+      if (audio) audio.pause();
+      ui.root.classList.add("is-broken");
+      ui.toggle.disabled = true;
+      ui.msg.textContent = ui.root.dataset.error;
+      ui.msg.hidden = false;
+      ui.root.closest(".transcript")?.classList.remove("can-play");
+      highlight(null);
+    }
+
+    // A recording made with the microphone keeps the two sides on separate channels:
+    // played as is, each voice would sit in one ear. Both go to both ears instead.
+    function mixToMono() {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context || !("mono" in ui.root.dataset)) return;
+      try {
+        context = new Context();
+        const mix = context.createGain();
+        mix.channelCount = 1;
+        mix.channelCountMode = "explicit";
+        mix.channelInterpretation = "speakers";
+        mix.connect(context.destination);
+        // Last: once the element feeds the graph it is heard only through it.
+        context.createMediaElementSource(audio).connect(mix);
+      } catch (error) {
+        context = null;
+      }
+    }
+
+    function ensureAudio() {
+      if (audio) return audio;
+      audio = new Audio();
+      audio.preload = "metadata";
+      audio.src = ui.root.dataset.src;
+      mixToMono();
+      audio.addEventListener("loadedmetadata", function () {
+        if (Number.isFinite(audio.duration) && audio.duration > 0) {
+          ui.seek.max = String(audio.duration);
+          ui.total.textContent = clock(audio.duration, ui.long);
+        }
+        if (pendingTime !== null) {
+          audio.currentTime = Math.min(pendingTime, Math.max(0, total() - 0.1));
+          pendingTime = null;
+        }
+      });
+      audio.addEventListener("timeupdate", function () {
+        if (pendingTime !== null || dragging) return;
+        paint(audio.currentTime);
+        follow(audio.currentTime);
+      });
+      audio.addEventListener("play", function () {
+        setPlaying(true);
+        reveal();
+      });
+      audio.addEventListener("pause", () => setPlaying(false));
+      audio.addEventListener("ended", () => setPlaying(false));
+      audio.addEventListener("error", fail);
+      audio.playbackRate = SPEEDS[speed];
+      return audio;
+    }
+
+    function play() {
+      ensureAudio();
+      if (context && context.state === "suspended") context.resume().catch(() => {});
+      const started = audio.play();
+      // A refused start (no file any more, a format the system cannot read) ends as an
+      // error event; a play() interrupted by a pause is not a failure.
+      if (started && started.catch) started.catch(() => {});
+    }
+
+    function seek(time, thenPlay) {
+      ensureAudio();
+      const target = Math.max(0, time);
+      if (audio.readyState >= 1) {
+        audio.currentTime = Math.min(target, Math.max(0, total() - 0.1));
+      } else {
+        pendingTime = target;
+      }
+      paint(target);
+      follow(target);
+      if (thenPlay) play();
+    }
+
+    function loadSegments() {
+      if (segments) return segments;
+      segments = Array.from(document.querySelectorAll(".transcript .seg[data-start]")).map(function (el) {
+        return { el: el, start: Number(el.dataset.start), end: Number(el.dataset.end) };
+      });
+      return segments;
+    }
+
+    // The paragraph spoken at `time`: the last one that has started. Voices on two
+    // channels can overlap, so the end of a paragraph does not close it.
+    function segmentAt(time) {
+      const list = loadSegments();
+      let low = 0;
+      let high = list.length - 1;
+      let found = null;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (list[mid].start <= time + 0.05) {
+          found = list[mid];
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return found;
+    }
+
+    function highlight(segment) {
+      if (active === segment) return false;
+      if (active) active.el.classList.remove("is-playing");
+      active = segment;
+      if (active) active.el.classList.add("is-playing");
+      return true;
+    }
+
+    function follow(time) {
+      if (highlight(segmentAt(time)) && audio && !audio.paused) reveal();
+    }
+
+    // Brings the paragraph being spoken into view, unless the reader has just scrolled.
+    function reveal() {
+      if (!active || Date.now() - lastScroll < FOLLOW_PAUSE_MS) return;
+      const box = active.el.getBoundingClientRect();
+      const bottom = window.innerHeight - ui.root.offsetHeight - 32;
+      if (box.top >= 72 && box.bottom <= bottom) return;
+      active.el.scrollIntoView({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+    }
+
+    // Time of a click inside a paragraph. Only paragraphs have times, so the place inside
+    // one is estimated from how far into its text the clicked word begins.
+    function timeOfClick(event, el) {
+      const start = Number(el.dataset.start);
+      const end = Number(el.dataset.end);
+      if (!Number.isFinite(start)) return null;
+      const text = el.querySelector(".seg-text");
+      // Beside the text (the margin, the end of a short line) there is no word to aim at.
+      if (!text || !text.contains(event.target)) return start;
+      const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(event.clientX, event.clientY) : null;
+      const node = caret && caret.startContainer;
+      if (!text || !node || node.nodeType !== Node.TEXT_NODE || node.parentNode !== text || !(end > start)) {
+        return start;
+      }
+      const words = node.data;
+      let offset = Math.min(caret.startOffset, words.length);
+      while (offset > 0 && !/\s/.test(words[offset - 1])) offset -= 1;
+      const share = words.trim().length > 0 ? offset / words.length : 0;
+      return Math.max(start, start + share * (end - start) - LEAD_S);
+    }
+
+    // Where Space already means something. The seek bar keeps focus after a drag and
+    // does nothing with Space, so there it still pauses.
+    function editable(target) {
+      return target instanceof Element && Boolean(target.closest("input:not(#player-seek), textarea, select, button, a, [contenteditable], dialog"));
+    }
+
+    function init() {
+      const root = byId("player");
+      if (!root) return;
+      ui = {
+        root: root,
+        toggle: byId("player-toggle"),
+        icon: byId("player-toggle").querySelector(".i"),
+        now: byId("player-now"),
+        total: byId("player-total"),
+        seek: byId("player-seek"),
+        speed: byId("player-speed"),
+        msg: byId("player-msg"),
+        long: byId("player-total").textContent.split(":").length > 2,
+      };
+      ui.toggle.addEventListener("click", function () {
+        if (audio && !audio.paused) audio.pause();
+        else play();
+      });
+      ui.speed.addEventListener("click", function () {
+        speed = (speed + 1) % SPEEDS.length;
+        ui.speed.textContent = SPEEDS[speed] + "×";
+        if (audio) audio.playbackRate = SPEEDS[speed];
+      });
+      ui.seek.addEventListener("input", function () {
+        dragging = true;
+        const time = Number(ui.seek.value);
+        ui.now.textContent = clock(time, ui.long);
+        ui.seek.style.setProperty("--played", (total() > 0 ? (time / total()) * 100 : 0).toFixed(2) + "%");
+      });
+      ui.seek.addEventListener("change", function () {
+        dragging = false;
+        lastScroll = 0;
+        seek(Number(ui.seek.value), false);
+        if (audio && !audio.paused) reveal();
+      });
+      root.closest(".transcript").addEventListener("click", function (event) {
+        if (ui.root.classList.contains("is-broken") || ui.root.contains(event.target)) return;
+        const el = event.target instanceof Element ? event.target.closest(".seg") : null;
+        if (!el) return;
+        // Selecting text to copy is not a request to play.
+        const selection = window.getSelection();
+        if ((selection && !selection.isCollapsed) || event.detail > 1) return;
+        const stamp = event.target.closest("a.ts");
+        const time = stamp ? Number(el.dataset.start) : timeOfClick(event, el);
+        if (time === null || !Number.isFinite(time)) return;
+        lastScroll = Date.now();
+        seek(time, true);
+      });
+      ["wheel", "touchmove", "keydown"].forEach(function (name) {
+        window.addEventListener(name, () => { lastScroll = Date.now(); }, { passive: true });
+      });
+      document.addEventListener("keydown", function (event) {
+        if (event.key !== " " || event.repeat || event.metaKey || event.ctrlKey || event.altKey || editable(event.target)) return;
+        if (ui.toggle.disabled) return;
+        event.preventDefault();
+        ui.toggle.click();
+      });
+    }
+
+    return { init: init };
+  })();
 
   // --- first-run tips -----------------------------------------------------------------
   //
@@ -1649,6 +1951,7 @@
     document.querySelectorAll("textarea.inline").forEach(fit);
     enhanceSelects(document);
     recorder.init();
+    player.init();
     // Arrived through the "Search" link or the "/" key from another page.
     if (window.location.hash === "#search") {
       byId("q")?.focus();

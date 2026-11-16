@@ -208,6 +208,8 @@ mark {
 .i-globe { --icon: url("/static/icons/globe.svg"); }
 .i-info { --icon: url("/static/icons/info.svg"); }
 .i-mic { --icon: url("/static/icons/mic.svg"); }
+.i-pause { --icon: url("/static/icons/pause.svg"); }
+.i-play { --icon: url("/static/icons/play.svg"); }
 .i-record { --icon: url("/static/icons/record.svg"); }
 .i-refresh { --icon: url("/static/icons/refresh.svg"); }
 .i-search { --icon: url("/static/icons/search.svg"); }
@@ -978,7 +980,6 @@ mark {
   background: var(--accent);
   transform: scaleX(var(--level, 0));
   transform-origin: left center;
-  transition: transform 160ms linear;
 }
 
 .rec-notice, .rec-result { display: grid; gap: var(--s2); }
@@ -1527,6 +1528,111 @@ progress::-moz-progress-bar { border-radius: var(--r-full); background: var(--ac
 .seg:target { animation: target-fade 1.6s ease-in 1 both; }
 .seg:target .ts { color: var(--accent-text); }
 
+/* --- player ------------------------------------------------------------------------ */
+
+.transcript > .section-title .section-aside { font-size: var(--fs-xs); text-transform: none; }
+
+/* With a player the text is a control: a click plays the recording from that place. */
+.can-play .seg-text { cursor: pointer; }
+.seg.is-playing { background: var(--accent-tint); }
+.seg.is-playing .ts { color: var(--accent-text); }
+
+/* Stays at the bottom of the window while the transcript is on screen. */
+.player {
+  position: sticky;
+  bottom: var(--s4);
+  z-index: 10;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--s3);
+  margin: var(--s6) calc(-1 * var(--s3)) 0;
+  padding: var(--s2) var(--s3) var(--s2) var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-ui);
+}
+
+.player-toggle {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 18px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease, transform var(--dur-fast) ease;
+}
+
+.player-toggle:hover { background: var(--accent-hover); }
+.player-toggle:active { transform: scale(0.94); }
+.player-toggle:disabled { background: var(--fill-active); color: var(--text-3); cursor: default; }
+.player-time { color: var(--text-2); }
+
+.player-speed {
+  min-width: 3.25rem;
+  height: 28px;
+  padding: 0 var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) ease;
+}
+
+.player-speed:hover { background: var(--fill); }
+
+.player-seek {
+  --played: 0%;
+  width: 100%;
+  height: 16px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.player-seek::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: linear-gradient(to right, var(--accent) var(--played), var(--fill-active) var(--played));
+}
+
+.player-seek::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: var(--shadow-xs);
+  -webkit-appearance: none;
+  appearance: none;
+  transition: transform var(--dur-fast) ease;
+}
+
+.player-seek:hover::-webkit-slider-thumb, .player-seek:active::-webkit-slider-thumb { transform: scale(1.25); }
+
+.player-toggle:focus-visible, .player-speed:focus-visible, .player-seek:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.player-msg { grid-column: 1 / -1; margin: 0; padding: 0 var(--s2) 2px; color: var(--text-2); }
+.player.is-broken .player-seek, .player.is-broken .player-time, .player.is-broken .player-speed { display: none; }
+.player.is-broken { border-radius: var(--r-md); grid-template-columns: auto minmax(0, 1fr); }
+.player.is-broken .player-msg { grid-column: 2; padding: 0; }
+
 /* --- dialog ------------------------------------------------------------------------ */
 
 .dialog {
@@ -1903,5 +2009,6 @@ progress::-moz-progress-bar { border-radius: var(--r-full); background: var(--ac
   .seg:target { animation: none; background: var(--accent-tint); }
   .drop.is-dragover, .drop.is-dragover .drop-icon { transform: none; }
   .rec-meter-fill, .switch, .switch::after { transition: none; }
+  .player-toggle, .player-seek::-webkit-slider-thumb { transition: none; }
   .tour-card.is-changing :is(.tour-content, .tour-count) { opacity: 1; translate: none; }
 }
